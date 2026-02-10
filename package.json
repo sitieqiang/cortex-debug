@@ -435,6 +435,11 @@
                 "icon": "$(arrow-down)"
             },
             {
+                "command": "cortex-debug.liveWatch.editValue",
+                "title": "Edit Value",
+                "icon": "$(edit)"
+            },
+            {
                 "command": "cortex-debug.liveWatch.addToLiveWatch",
                 "title": "Add to Live Watch",
                 "icon": "$(plus)"
@@ -2884,6 +2889,18 @@
             "view/item/context": [
                 {
                     "command": "cortex-debug.liveWatch.editExpr",
+                    "when": "view == cortex-debug.liveWatch && viewItem == expression",
+                    "group": "inline"
+                },
+                
+
+                {
+                    "command": "cortex-debug.liveWatch.editValue",
+                    "when": "view == cortex-debug.liveWatch && viewItem == field",
+                    "group": "inline"
+                },
+                {
+                    "command": "cortex-debug.liveWatch.editValue",
                     "when": "view == cortex-debug.liveWatch && viewItem == expression",
                     "group": "inline"
                 },

@@ -1095,6 +1095,13 @@ export class GDBDebugSession extends LoggingDebugSession {
                     this.sendResponse(response);
                 }
                 break;
+            case 'liveSetVariable':
+                if (this.miLiveGdb) {
+                    return this.miLiveGdb.setVariableRequest(response, args);
+                } else {
+                    this.sendResponse(response);
+                }
+                break;
             case 'is-global-or-static': {
                 const varRef = args.varRef;
                 const id = this.variableHandles.get(varRef);

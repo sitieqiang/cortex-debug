@@ -416,11 +416,12 @@ export class LiveWatchMonitor {
         Yes, we get all of these events and they seem to be harlmess
         const otherEvents = [
             'stopped',
+            'signal-stop',
+            'generic-stopped',
             'watchpoint',
             'watchpoint-scope',
             'step-end',
             'step-out-end',
-            'signal-stop',
             'running',
             'continue-failed',
             'thread-created',
@@ -467,6 +468,57 @@ export class LiveWatchMonitor {
         return new Promise<void>((resolve) => {
             this.varHandler.refreshCachedChangeList(this.miDebugger, resolve);
         });
+    }
+
+    public async setVariableRequest(response: DebugProtocol.Response, args: any): Promise<void> {
+        try {
+            const name = args.name;
+            const value = args.value;
+            const expr = args.expr;
+
+            // For live watch, we use floating variables, so threadId and frameId are -1
+            const threadId = -1;
+            const frameId = -1;
+
+            // Try to find the variable object name from the variable handles
+            let varObjName = name;
+            if (expr) {
+                // Create a hash for the expression to find the variable object name
+                const crypto = require('crypto');
+                const hasher = crypto.createHash('sha256');
+                hasher.update(expr);
+                const exprName = hasher.digest('hex');
+                varObjName = `hover_${exprName}`;
+            }
+
+            // Check if this variable exists in our cache
+            const varId = this.varHandler.variableHandlesReverse[varObjName];
+            if (varId === undefined) {
+                // Variable not found, try to create it first
+                try {
+                    const varObj = await this.miDebugger.varCreate(0, expr, varObjName, '@');
+                    this.varHandler.findOrCreateVariable(varObj);
+                } catch (e) {
+                    throw new Error(`Variable ${name} not found`);
+                }
+            }
+
+            // Perform the assignment using var-assign (original method)
+            const res = await this.miDebugger.varAssign(varObjName, value, threadId, frameId);
+            response.body = {
+                value: res.result('value')
+            };
+            response.success = true;
+            this.mainSession.sendResponse(response);
+
+            if (this.mainSession.args.showDevDebugOutput) {
+                this.mainSession.handleMsg('log', `LiveGDB: Set ${name} = ${value}\n`);
+            }
+        } catch (err) {
+            response.success = false;
+            response.message = err.toString();
+            this.mainSession.sendErrorResponsePub(response, 1, err.toString());
+        }
     }
 
     private quitting = false;

@@ -32,7 +32,23 @@ export class LiveVariableNode extends BaseNode {
     public getExpr(): string {
         return this.expr;
     }
-    
+
+    public getValue(): string {
+        return this.value;
+    }
+
+    public getType(): string {
+        return this.type;
+    }
+
+    public getVariablesReference(): number {
+        return this.variablesReference;
+    }
+
+    public getAddress(): string {
+        return this.address;
+    }
+
     public getChildren(): LiveVariableNode[] {
         if (!this.parent && (!this.children || !this.children.length)) {
             return [new LiveVariableNodeMsg(this)];
@@ -363,7 +379,7 @@ class LiveVariableNodeMsg extends LiveVariableNode {
             label: tmp + (this.empty ? ', and use the \'+\' button above to add new expressions' : '')
         };
         const item = new TreeItem(label, state);
-        item.contextValue = this.isRootChild() ? 'expression' : 'field';
+        item.contextValue = 'message';  // Use a different context value to avoid showing edit menu
         item.tooltip = '~' + label.label + '~';
         return item;
     }
@@ -629,6 +645,50 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
         const parent = node?.getParent() as LiveVariableNode;
         if (parent && parent.moveDownChild(node)) {
             this.fire();
+        }
+    }
+
+    public async editValue(node: LiveVariableNode) {
+        if (!LiveWatchTreeProvider.session) {
+            vscode.window.showWarningMessage('No active debug session');
+            return;
+        }
+
+        const currentValue = node.getValue();
+        const currentType = node.getType();
+
+        const opts: vscode.InputBoxOptions = {
+            placeHolder: 'Enter new value',
+            ignoreFocusOut: true,
+            value: currentValue,
+            prompt: `Edit value for ${node.getName()} (${currentType})`,
+            validateInput: (value: string) => {
+                if (!value || value.trim() === '') {
+                    return 'Value cannot be empty';
+                }
+                return null;
+            }
+        };
+
+        const result = await vscode.window.showInputBox(opts);
+        if (result !== undefined && result !== currentValue) {
+            try {
+                const response = await LiveWatchTreeProvider.session.customRequest('liveSetVariable', {
+                    name: node.getName(),
+                    value: result,
+                    variablesReference: node.getVariablesReference(),
+                    expr: node.getExpr()
+                });
+
+                if (response.success === false) {
+                    vscode.window.showErrorMessage(`Failed to set value: ${response.message || 'Unknown error'}`);
+                } else {
+                    // Refresh to show the updated value
+                    this.refresh(LiveWatchTreeProvider.session);
+                }
+            } catch (err) {
+                vscode.window.showErrorMessage(`Failed to set value: ${err.toString()}`);
+            }
         }
     }
 
