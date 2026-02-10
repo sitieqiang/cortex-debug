@@ -677,7 +677,9 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
                     name: node.getName(),
                     value: result,
                     variablesReference: node.getVariablesReference(),
-                    expr: node.getExpr()
+                    expr: node.getExpr(),
+                    address: node.getAddress(),
+                    type: node.getType()
                 });
 
                 if (response.success === false) {

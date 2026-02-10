@@ -471,10 +471,31 @@ export class LiveWatchMonitor {
     }
 
     public async setVariableRequest(response: DebugProtocol.Response, args: any): Promise<void> {
+        console.log(`LiveGDB: setVariableRequest called - name=${args.name}, value=${args.value}, address=${args.address}, type=${args.type}`);
+        this.mainSession.handleMsg('stdout', `LiveGDB: setVariableRequest called - address='${args.address}', type='${args.type}'\n`);
         try {
             const name = args.name;
             const value = args.value;
             const expr = args.expr;
+            const address = args.address;  // Variable address for direct memory write
+            const type = args.type;        // Variable type for determining size
+
+            // Check if we should use J-Link monitor commands for direct memory write
+            // This avoids triggering watchpoints/SIGTRAP
+            const useMonitorWrite = this.shouldUseMonitorWrite() && address && type;
+
+            if (useMonitorWrite) {
+                // Use J-Link monitor commands to write directly to memory
+                await this.writeViaMonitor(address, value, type);
+                response.body = { value: value };
+                response.success = true;
+                this.mainSession.sendResponse(response);
+
+                if (this.mainSession.args.showDevDebugOutput) {
+                    this.mainSession.handleMsg('log', `LiveGDB: Monitor write ${address} = ${value}\n`);
+                }
+                return;
+            }
 
             // For live watch, we use floating variables, so threadId and frameId are -1
             const threadId = -1;
@@ -519,6 +540,91 @@ export class LiveWatchMonitor {
             response.message = err.toString();
             this.mainSession.sendErrorResponsePub(response, 1, err.toString());
         }
+    }
+
+    /**
+     * Check if we should use J-Link monitor commands for memory write
+     */
+    private shouldUseMonitorWrite(): boolean {
+        // Check if the servertype is jlink
+        return this.mainSession.args.servertype === 'jlink';
+    }
+
+    /**
+     * Write to memory using GDB MI commands via Live GDB session
+     * This avoids triggering watchpoints/SIGTRAP
+     */
+    private async writeViaMonitor(address: string, value: string, type: string): Promise<void> {
+        // Extract actual address: take only the part before first space
+        // This handles cases where address contains placeholders like "<cnt>"
+        const spaceIndex = address.indexOf(' ');
+        if (spaceIndex !== -1) {
+            address = address.substring(0, spaceIndex);
+        }
+
+        // Parse the value - handle hex (0x prefix), decimal, and octal prefixes
+        let numValue: number;
+        if (value.startsWith('0x') || value.startsWith('0X')) {
+            numValue = parseInt(value, 16);
+        } else if (value.startsWith('0b') || value.startsWith('0B')) {
+            numValue = parseInt(value, 2);
+        } else if (value.startsWith('0') && value.length > 1) {
+            numValue = parseInt(value, 8);
+        } else {
+            numValue = parseInt(value, 10);
+        }
+
+        if (isNaN(numValue)) {
+            throw new Error(`Invalid value: ${value}`);
+        }
+
+        // Determine the size in bytes based on type
+        let size = 4; // Default to 4 bytes (int32)
+        const lowerType = type.toLowerCase();
+
+        if (lowerType.includes('int8') || lowerType.includes('int8_t') ||
+            lowerType.includes('uint8') || lowerType.includes('uint8_t') ||
+            lowerType.includes('char')) {
+            size = 1;
+        } else if (lowerType.includes('int16') || lowerType.includes('int16_t') ||
+                   lowerType.includes('uint16') || lowerType.includes('uint16_t') ||
+                   lowerType.includes('short')) {
+            size = 2;
+        } else if (lowerType.includes('int64') || lowerType.includes('int64_t') ||
+                   lowerType.includes('uint64') || lowerType.includes('uint64_t') ||
+                   lowerType.includes('long long')) {
+            size = 8;
+        }
+
+        // Convert to hex value (not little-endian bytes - J-Link expects regular hex value)
+        const hexValue = numValue.toString(16).toLowerCase();
+
+        // Determine J-Link monitor command based on size
+        let monitorCmd = 'memU32'; // Default
+        if (size === 1) {
+            monitorCmd = 'memU8';
+        } else if (size === 2) {
+            monitorCmd = 'memU16';
+        } else if (size === 8) {
+            monitorCmd = 'memU64';
+        }
+
+        // Debug: log individual components before building cmd
+        //console.log(`LiveGDB: DEBUG - monitorCmd='${monitorCmd}', address='${address}', hexValue='${hexValue}'`);
+        //this.mainSession.handleMsg('stdout', `LiveGDB: DEBUG - monitorCmd='${monitorCmd}', address='${address}', hexValue='${hexValue}'\n`);
+
+        // Format: monitor memU8/memU16/memU32 <addr> <data>
+        // Data should be in hex format with 0x prefix
+        const cmd = `monitor ${monitorCmd} ${address} 0x${hexValue}`;
+
+        // Log the constructed command
+        //console.log(`LiveGDB: DEBUG - cmd='${cmd}'`);
+        this.mainSession.handleMsg('stdout', `LiveGDB: DEBUG - cmd='${cmd}'\n`);
+
+        // Use sendRaw directly to bypass MI command wrapping
+        // sendUserInput would wrap it as: interpreter-exec console "cmd"
+        // which causes issues with J-Link GDB Server
+        this.miDebugger.sendRaw(cmd);
     }
 
     private quitting = false;
