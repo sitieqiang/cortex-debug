@@ -940,7 +940,32 @@ export class MI2 extends EventEmitter implements IBackend {
         if (overrideVal) {
             result = result.map((r: string[]) => r[0] === 'value' ?  ['value', overrideVal] : r);
         }
-        return new VariableObject(parent, result);
+        const varObj = new VariableObject(parent, result);
+
+        // Try to get the address of the variable for live watch
+        if (name !== '-') {
+            try {
+                // Use -data-evaluate-expression to get the address
+                const addrExpr = expression.replace(/\\"/g, '"');
+                const addrResp = await this.sendCommand(`data-evaluate-expression ${thFr} "&${addrExpr}"`);
+                const addrValue = addrResp.result('value');
+                if (addrValue && addrValue.startsWith('0x')) {
+                    // Find or add 'addr' field to result
+                    const addrIndex = result.findIndex((r: string[]) => r[0] === 'addr');
+                    if (addrIndex >= 0) {
+                        result[addrIndex][1] = addrValue;
+                    } else {
+                        result.push(['addr', addrValue]);
+                    }
+                    varObj.address = addrValue;
+                }
+            } catch (e) {
+                // Address might not be available for all variables (e.g., register variables)
+                // Silently ignore
+            }
+        }
+
+        return varObj;
     }
 
     public async varEvalExpression(name: string): Promise<MINode> {
@@ -950,7 +975,7 @@ export class MI2 extends EventEmitter implements IBackend {
         return this.sendCommand(`var-evaluate-expression ${name}`);
     }
 
-    public async varListChildren(parent: number, name: string): Promise<VariableObject[]> {
+    public async varListChildren(parent: number, name: string, fetchAddresses = false): Promise<VariableObject[]> {
         if (trace) {
             this.log('stderr', 'varListChildren');
         }
@@ -962,10 +987,29 @@ export class MI2 extends EventEmitter implements IBackend {
         for (const item of children) {
             const child = new VariableObject(parent, item[1]);
             if (child.exp.startsWith('<anonymous ')) {
-                omg.push(... await this.varListChildren(parent, child.name));
+                omg.push(... await this.varListChildren(parent, child.name, fetchAddresses));
             } else if (keywords.find((x) => x === child.exp)) {
-                omg.push(... await this.varListChildren(parent, child.name));
+                omg.push(... await this.varListChildren(parent, child.name, fetchAddresses));
             } else {
+                // Only fetch addresses if explicitly requested (for live watch)
+                // This is expensive, so we don't do it for normal variable watching
+                if (fetchAddresses) {
+                    try {
+                        // Try to get the address using the variable object's path expression
+                        const pathExpr = await this.sendCommand(`var-info-path-expression "${child.name}"`);
+                        const path = pathExpr.result('path_expr');
+                        if (path) {
+                            const addrResp = await this.sendCommand(`data-evaluate-expression "&(${path})"`);
+                            const addrValue = addrResp.result('value');
+                            if (addrValue && addrValue.startsWith('0x')) {
+                                child.address = addrValue;
+                            }
+                        }
+                    } catch (e) {
+                        // Address might not be available for all variables (e.g., register variables, bit fields)
+                        // Silently ignore
+                    }
+                }
                 omg.push(child);
             }
         }

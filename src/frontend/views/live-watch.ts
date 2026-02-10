@@ -18,6 +18,7 @@ export class LiveVariableNode extends BaseNode {
     protected session: vscode.DebugSession | undefined;        // This is transient
     protected children: LiveVariableNode[] | undefined;
     protected prevValue: string = '';
+    protected address: string = '';    // Memory address of the variable
     constructor(
         parent: LiveVariableNode | undefined,
         protected name: string,
@@ -71,17 +72,21 @@ export class LiveVariableNode extends BaseNode {
     public getTreeItem(): TreeItem | Promise<TreeItem> {
         const state = this.variablesReference || (this.children?.length > 0) ?
             (this.children?.length > 0 ? TreeItemCollapsibleState.Expanded : TreeItemCollapsibleState.Collapsed) : TreeItemCollapsibleState.None;
-        
+
         const parts = this.name.startsWith('\'') && this.isRootChild() ? this.name.split('\'::') : [this.name];
         const name = parts.pop();
+        let labelStr = name + ': ' + (this.value || 'not available');
+        if (this.address) {
+            labelStr += '\t@ ' + this.address;
+        }
         const label: vscode.TreeItemLabel = {
-            label: name + ': ' + (this.value || 'not available')
+            label: labelStr
         };
         if (this.prevValue && (this.prevValue !== this.value)) {
-            label.highlights = [[name.length + 2, label.label.length]];
+            label.highlights = [[name.length + 2, name.length + 2 + (this.value || 'not available').length]];
         }
         this.prevValue = this.value;
-        
+
         const item = new TreeItem(label, state);
         item.contextValue = this.isRootChild() ? 'expression' : 'field';
         let file = parts.length ? parts[0].slice(1) : '';
@@ -89,7 +94,11 @@ export class LiveVariableNode extends BaseNode {
             const cwd = this.session?.configuration?.cwd;
             file = cwd ? getPathRelative(cwd, file) : file;
         }
-        item.tooltip = (file ? 'File: ' + file + '\n' : '') + this.type;
+        let tooltip = (file ? 'File: ' + file + '\n' : '') + this.type;
+        if (this.address) {
+            tooltip += '\nAddress: ' + this.address;
+        }
+        item.tooltip = tooltip;
         return item;
     }
 
@@ -163,7 +172,7 @@ export class LiveVariableNode extends BaseNode {
     public reset(valuesToo = true) {
         this.session = undefined;
         if (valuesToo) {
-            this.value = this.type = this.prevValue = '';
+            this.value = this.type = this.prevValue = this.address = '';
             this.variablesReference = 0;
         }
         for (const child of this.children || []) {
@@ -206,6 +215,7 @@ export class LiveVariableNode extends BaseNode {
                             variable.value || '',
                             variable.type || '',        // This will become tooltip
                             variable.variablesReference ?? 0);
+                        ch.address = variable.address || '';
                         const oldState = oldStateMap[ch.name];
                         if (oldState) {
                             ch.expanded = oldState.expanded && (ch.variablesReference > 0);
@@ -264,6 +274,7 @@ export class LiveVariableNode extends BaseNode {
                         this.variablesReference = result.variablesReference ?? 0;
                         this.namedVariables = result.namedVariables ?? 0;
                         this.indexedVariables = result.indexedVariables ?? 0;
+                        this.address = result.address || '';
                         if (oldType !== this.type) {
                             this.children = this.variablesReference ? [] : undefined;
                         }

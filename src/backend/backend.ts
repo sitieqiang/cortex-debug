@@ -71,6 +71,7 @@ export class VariableObject {
     public fullExp: string;
     public parent: number;      // Variable Reference
     public children: {[name: string]: string};  // Field-name to Gdb-variable map
+    public address: string;     // Memory address of the variable
     constructor(p: number, node: any) {
         this.parent = p;
         this.name = MINode.valueOf(node, 'name');
@@ -85,6 +86,7 @@ export class VariableObject {
         this.children = {};
         // TODO: use has_more when it's > 0
         this.hasMore = !!MINode.valueOf(node, 'has_more');
+        this.address = MINode.valueOf(node, 'addr') || '';
     }
 
     public createToolTip(name: string, value: string): string {
@@ -137,6 +139,10 @@ export class VariableObject {
             variablesReference: this.id
         };
         this.tryAddMemoryReference(res);
+        if (this.address) {
+            res['memoryReference'] = hexFormat(parseInt(this.address));
+            res['address'] = this.address;
+        }
 
         res.type = this.createToolTip(res.name, res.value);      // This ends up becoming a tool-tip
         return res;
@@ -152,10 +158,18 @@ export class VariableObject {
             variablesReference: this.id
         };
         this.tryAddMemoryReference(res);
+        if (this.address) {
+            res['memoryReference'] = hexFormat(parseInt(this.address));
+            res['address'] = this.address;
+        }
         return res;
     }
 
     private tryAddMemoryReference(result: object): void {
+        // Don't override memoryReference if address is already set
+        if (result['memoryReference']) {
+            return;
+        }
         if ((this.numchild > 0 || this.type === 'void *')
             && this.value.startsWith('0x')) {
             result['memoryReference'] = hexFormat(parseInt(this.value));

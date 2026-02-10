@@ -279,7 +279,7 @@ export class VariablesHandler {
                             vars.push(child.toProtocolVariable());
                         }
                     } else {
-                        children = await miDebugger.varListChildren(args.variablesReference, id.name);
+                        children = await miDebugger.varListChildren(args.variablesReference, id.name, true);
                         pVar.children = {};     // Clear in case type changed, dynamic variable, etc.
                         vars = children.map((child) => {
                             const varId = this.findOrCreateVariable(child);
