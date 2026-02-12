@@ -2,7 +2,7 @@ import { DebugProtocol } from '@vscode/debugprotocol';
 import { Handles } from '@vscode/debugadapter';
 import { MI2 } from './backend/mi2/mi2';
 import { decodeReference, ExtendedVariable, GDBDebugSession, RequestQueue } from './gdb';
-import { MIError, VariableObject } from './backend/backend';
+import { MIError, VariableObject, BitfieldInfo } from './backend/backend';
 import * as crypto from 'crypto';
 import { MINode } from './backend/mi_parse';
 import { expandValue } from './backend/gdb_expansion';
@@ -471,28 +471,37 @@ export class LiveWatchMonitor {
     }
 
     public async setVariableRequest(response: DebugProtocol.Response, args: any): Promise<void> {
-        console.log(`LiveGDB: setVariableRequest called - name=${args.name}, value=${args.value}, address=${args.address}, type=${args.type}`);
-        this.mainSession.handleMsg('stdout', `LiveGDB: setVariableRequest called - address='${args.address}', type='${args.type}'\n`);
+        this.mainSession.handleMsg('stdout', `DebugLiveWatch: setVariableRequest called - address='${args.address}', type='${args.type}'\n`);
         try {
             const name = args.name;
             const value = args.value;
             const expr = args.expr;
             const address = args.address;  // Variable address for direct memory write
             const type = args.type;        // Variable type for determining size
+            let bitfieldInfo ;  // Bitfield information
 
             // Check if we should use J-Link monitor commands for direct memory write
             // This avoids triggering watchpoints/SIGTRAP
             const useMonitorWrite = this.shouldUseMonitorWrite() && address && type;
 
             if (useMonitorWrite) {
+                // Dynamically check if this is a bitfield and get its info
+                if (expr) {
+                    const dynamicBitfieldInfo = await this.getBitfieldInfoForExpr(expr);
+                    if (dynamicBitfieldInfo) {
+                        bitfieldInfo = dynamicBitfieldInfo;
+                        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [setVariableRequest] Dynamic bitfield info: ${JSON.stringify(bitfieldInfo)}\n`);
+                    }
+                }
+
                 // Use J-Link monitor commands to write directly to memory
-                await this.writeViaMonitor(address, value, type);
+                await this.writeViaMonitor(address, value, type, expr, bitfieldInfo);
                 response.body = { value: value };
                 response.success = true;
                 this.mainSession.sendResponse(response);
 
                 if (this.mainSession.args.showDevDebugOutput) {
-                    this.mainSession.handleMsg('log', `LiveGDB: Monitor write ${address} = ${value}\n`);
+                    this.mainSession.handleMsg('log', `DebugLiveWatch: Monitor write func writeViaMonitor ${address} = ${value}\n`);
                 }
                 return;
             }
@@ -551,80 +560,247 @@ export class LiveWatchMonitor {
     }
 
     /**
+     * Get bitfield information for an expression by parsing its type
+     * @param expr Variable expression (e.g., 'GPIO->ODR', 'structVar.member')
+     * @returns BitfieldInfo if the variable is a bitfield, null otherwise
+     */
+    private async getBitfieldInfoForExpr(expr: string): Promise<BitfieldInfo | null> {
+        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Checking expr: ${expr}\n`);
+
+        try {
+            // Extract parent and member if expr contains '.' or '->'
+            const dotIndex = expr.lastIndexOf('.');
+            const arrowIndex = expr.lastIndexOf('->');
+            const separatorIndex = Math.max(dotIndex, arrowIndex);
+
+            if (separatorIndex === -1) {
+                this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] No parent/child separator found\n`);
+                return null;
+            }
+
+            // This is a member of a struct/union
+            const parentExpr = expr.substring(0, separatorIndex);
+            const memberName = expr.substring(separatorIndex + (arrowIndex !== -1 ? 2 : 1));
+
+            this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Parent: ${parentExpr}, Member: ${memberName}\n`);
+
+            
+
+            // Get struct type info with offsets
+            const structInfo = await this.miDebugger.getStructTypeInfo(parentExpr,memberName);
+            if (!structInfo) {
+                this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] No struct info found for ${parentExpr}\n`);
+                return null;
+            }
+
+
+            const memberInfo = structInfo;
+            if (memberInfo) {
+                this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Member found: ${JSON.stringify(memberInfo)}\n`);
+
+                // Check if this is a bitfield (has bitWidth)
+                if (memberInfo.bitWidth !== undefined && memberInfo.bitWidth > 0) {
+
+
+                    this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Found bitfield: bitOffset=${memberInfo.bitOffset}, bitWidth=${memberInfo.bitWidth}\n`);
+
+                    return {
+                        isBitfield: true,
+                        bitOffset: memberInfo.bitOffset || 0,
+                        bitWidth: memberInfo.bitWidth,
+                        memberPath: expr
+                    };
+                } else {
+                    this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Member is not a bitfield\n`);
+                }
+            } else {
+                this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Member '${memberName}' not found in struct. \n`);
+            }
+
+            return null;
+        } catch (e) {
+            this.mainSession.handleMsg('stderr', `DebugLiveWatch: [getBitfieldInfoForExpr] Error: ${e}\n`);
+            return null;
+        }
+    }
+
+    /**
      * Write to memory using GDB MI commands via Live GDB session
      * This avoids triggering watchpoints/SIGTRAP
+     * @param address Memory address
+     * @param value Value to write
+     * @param type Variable type
+     * @param expr Variable expression (e.g., 'structVar.memberName')
+     * @param bitfieldInfo Optional bitfield information for read-modify-write
      */
-    private async writeViaMonitor(address: string, value: string, type: string): Promise<void> {
+    private async writeViaMonitor(address: string, value: string, type: string, expr?: string, bitfieldInfo?: BitfieldInfo): Promise<void> {
         // Extract actual address: take only the part before first space
-        // This handles cases where address contains placeholders like "<cnt>"
         const spaceIndex = address.indexOf(' ');
         if (spaceIndex !== -1) {
             address = address.substring(0, spaceIndex);
         }
 
-        // Parse the value - handle hex (0x prefix), decimal, and octal prefixes
-        let numValue: number;
-        if (value.startsWith('0x') || value.startsWith('0X')) {
-            numValue = parseInt(value, 16);
-        } else if (value.startsWith('0b') || value.startsWith('0B')) {
-            numValue = parseInt(value, 2);
-        } else if (value.startsWith('0') && value.length > 1) {
-            numValue = parseInt(value, 8);
-        } else {
-            numValue = parseInt(value, 10);
+        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeViaMonitor] address=${address}, value=${value}, type=${type}, expr=${expr}\n`);
+        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeViaMonitor] bitfieldInfo=${JSON.stringify(bitfieldInfo)}\n`);
+
+        const lowerType = type.toLowerCase();
+        const isFloat = lowerType.includes('float') && !lowerType.includes('double');
+        const isDouble = lowerType.includes('double');
+
+        // Get size via GDB sizeof
+        const sizeResult = await this.miDebugger.sendCommand(`data-evaluate-expression "sizeof(${expr})"`);
+        const size = parseInt(sizeResult.result('value'));
+
+        // Handle bitfield - need read-modify-write (bitfields can't be float)
+        if (bitfieldInfo && bitfieldInfo.isBitfield && bitfieldInfo.bitOffset !== undefined && bitfieldInfo.bitWidth !== undefined) {
+            const numValue = parseInt(value, value.startsWith('0x') ? 16 : 10);
+            if (isNaN(numValue)) { throw new Error(`Invalid value: ${value}`); }
+            this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeViaMonitor] BITFIELD detected, calling writeBitfield\n`);
+            await this.writeBitfield(size, address, numValue, bitfieldInfo);
+            return;
         }
 
-        if (isNaN(numValue)) {
+        // Convert value to raw hex bytes based on type
+        if (isFloat) {
+            // float32: IEEE 754 single precision
+            const floatVal = parseFloat(value);
+            if (isNaN(floatVal)) { throw new Error(`Invalid float value: ${value}`); }
+            const buf = new ArrayBuffer(4);
+            new DataView(buf).setFloat32(0, floatVal, true); // little-endian
+            const hexValue = new DataView(buf).getUint32(0, true).toString(16).toLowerCase();
+            const cmd = `monitor memU32 ${address} 0x${hexValue}`;
+            this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write float] cmd='${cmd}'\n`);
+            this.miDebugger.sendRaw(cmd);
+            return;
+        }
+
+        if (isDouble) {
+            // float64: IEEE 754 double precision, write as two memU32 (little-endian)
+            const doubleVal = parseFloat(value);
+            if (isNaN(doubleVal)) { throw new Error(`Invalid double value: ${value}`); }
+            const buf = new ArrayBuffer(8);
+            new DataView(buf).setFloat64(0, doubleVal, true); // little-endian
+            const low32 = new DataView(buf).getUint32(0, true);
+            const high32 = new DataView(buf).getUint32(4, true);
+
+            const cmdLow = `monitor memU32 ${address} 0x${low32.toString(16).toLowerCase()}`;
+            this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write double low] cmd='${cmdLow}'\n`);
+            this.miDebugger.sendRaw(cmdLow);
+
+            const addrHigh = '0x' + (parseInt(address, 16) + 4).toString(16).toLowerCase();
+            const cmdHigh = `monitor memU32 ${addrHigh} 0x${high32.toString(16).toLowerCase()}`;
+            this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write double high] cmd='${cmdHigh}'\n`);
+            this.miDebugger.sendRaw(cmdHigh);
+            return;
+        }
+
+        // Integer types - use BigInt for proper 64-bit support
+        let bigValue: bigint;
+        try {
+            if (value.startsWith('0x') || value.startsWith('0X')) {
+                bigValue = BigInt(value);
+            } else if (value.startsWith('0b') || value.startsWith('0B')) {
+                bigValue = BigInt(value);
+            } else if (value.startsWith('0') && value.length > 1) {
+                bigValue = BigInt('0o' + value.substring(1));
+            } else {
+                bigValue = BigInt(value);
+            }
+        } catch (e) {
             throw new Error(`Invalid value: ${value}`);
         }
 
-        // Determine the size in bytes based on type
-        let size = 4; // Default to 4 bytes (int32)
-        const lowerType = type.toLowerCase();
+        const MASK32 = BigInt('0xFFFFFFFF');
+        const low32 = Number(bigValue & MASK32) >>> 0;
+        const hexValue = low32.toString(16).toLowerCase();
 
-        if (lowerType.includes('int8') || lowerType.includes('int8_t') ||
-            lowerType.includes('uint8') || lowerType.includes('uint8_t') ||
-            lowerType.includes('char')) {
-            size = 1;
-        } else if (lowerType.includes('int16') || lowerType.includes('int16_t') ||
-                   lowerType.includes('uint16') || lowerType.includes('uint16_t') ||
-                   lowerType.includes('short')) {
-            size = 2;
-        } else if (lowerType.includes('int64') || lowerType.includes('int64_t') ||
-                   lowerType.includes('uint64') || lowerType.includes('uint64_t') ||
-                   lowerType.includes('long long')) {
-            size = 8;
-        }
+        let monitorCmd = 'memU32';
+        if (size === 1) { monitorCmd = 'memU8'; }
+        else if (size === 2) { monitorCmd = 'memU16'; }
 
-        // Convert to hex value (not little-endian bytes - J-Link expects regular hex value)
-        const hexValue = numValue.toString(16).toLowerCase();
-
-        // Determine J-Link monitor command based on size
-        let monitorCmd = 'memU32'; // Default
-        if (size === 1) {
-            monitorCmd = 'memU8';
-        } else if (size === 2) {
-            monitorCmd = 'memU16';
-        } else if (size === 8) {
-            monitorCmd = 'memU64';
-        }
-
-        // Debug: log individual components before building cmd
-        //console.log(`LiveGDB: DEBUG - monitorCmd='${monitorCmd}', address='${address}', hexValue='${hexValue}'`);
-        //this.mainSession.handleMsg('stdout', `LiveGDB: DEBUG - monitorCmd='${monitorCmd}', address='${address}', hexValue='${hexValue}'\n`);
-
-        // Format: monitor memU8/memU16/memU32 <addr> <data>
-        // Data should be in hex format with 0x prefix
         const cmd = `monitor ${monitorCmd} ${address} 0x${hexValue}`;
-
-        // Log the constructed command
-        //console.log(`LiveGDB: DEBUG - cmd='${cmd}'`);
-        this.mainSession.handleMsg('stdout', `LiveGDB: DEBUG - cmd='${cmd}'\n`);
-
-        // Use sendRaw directly to bypass MI command wrapping
-        // sendUserInput would wrap it as: interpreter-exec console "cmd"
-        // which causes issues with J-Link GDB Server
+        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write] cmd='${cmd}'\n`);
         this.miDebugger.sendRaw(cmd);
+
+        if (size === 8) {
+            const addrHigh = '0x' + (parseInt(address, 16) + 4).toString(16).toLowerCase();
+            const high32 = Number((bigValue >> BigInt(32)) & MASK32) >>> 0;
+            const highHexValue = high32.toString(16).toLowerCase();
+            const writeCmd = `monitor memU32 ${addrHigh} 0x${highHexValue}`;
+            this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write 64-bit high] Writing: ${writeCmd}\n`);
+            this.miDebugger.sendRaw(writeCmd);
+        }
+    }
+
+    /**
+     * Write to a bitfield using read-modify-write
+     * @param address Base address of the container
+     * @param newValue New value for the bitfield
+     * @param bitfieldInfo Bitfield information
+     */
+    private async writeBitfield(containerSize:number,address: string, newValue: number, bitfieldInfo: BitfieldInfo): Promise<void> {
+        const bitOffset = bitfieldInfo.bitOffset!;
+        const bitWidth = bitfieldInfo.bitWidth!;
+
+        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] addr=${address}, offset=${bitOffset}, width=${bitWidth}, value=${newValue}, containerSize=${containerSize}\n`);
+
+        // Step 1: Read current value from memory
+        let monitorCmd = 'memU32';
+        if (containerSize === 1) {
+            monitorCmd = 'memU8';
+        } else if (containerSize === 2) {
+            monitorCmd = 'memU16';
+        } 
+
+        // Send read command using GDB MI data-read-memory
+        const readCmd = `data-read-memory-bytes ${address} ${containerSize}`;
+        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] Reading memory: ${readCmd}\n`);
+
+        const readResp = await this.miDebugger.sendCommand(readCmd);
+        const memoryBlock = readResp.result('memory')[0];
+        const contentsEntry = memoryBlock.find((entry: any) => entry[0] === 'contents');
+        if (!contentsEntry) { throw new Error('Failed to read memory contents'); }
+        const memoryData = contentsEntry[1] as string;
+
+        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] Raw memory data: ${memoryData}\n`);
+
+        // Parse hex bytes to integer (little-endian)
+        // i increments by 2 (2 hex chars per byte), so byte index = i/2, shift = i*4
+        let currentValue = 0;
+        for (let i = 0; i < memoryData.length; i += 2) {
+            const byte = parseInt(memoryData.substr(i, 2), 16);
+            currentValue |= (byte << i*4);
+        }
+
+        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] Current container value = 0x${currentValue.toString(16)}\n`);
+
+        // Step 2: Clear the target bitfield and set new value
+        // Create mask for the bitfield
+        const mask = ((1 << bitWidth) - 1) << bitOffset;
+        const maskedValue = (newValue & ((1 << bitWidth) - 1)) << bitOffset;
+
+        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] mask=0x${mask.toString(16)}, maskedValue=0x${maskedValue.toString(16)}\n`);
+
+        // Clear target bits and set new value
+        const newValueContainer = (currentValue & ~mask) | maskedValue;
+
+        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] New container value = 0x${newValueContainer.toString(16)}\n`);
+
+        const lowNewValueContainer = (newValueContainer>>>0) & 0xFFFFFFFF;
+        // Step 3: Write back the modified value
+        const hexValue = (lowNewValueContainer >>> 0).toString(16).toLowerCase();
+        const writeCmd = `monitor ${monitorCmd} ${address} 0x${hexValue}`;
+        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] Writing: ${writeCmd}\n`);
+        this.miDebugger.sendRaw(writeCmd);
+        if (containerSize === 8) {
+            const addrNum = parseInt(address, 16) + 4;
+            const highAddr = '0x' + addrNum.toString(16).toLowerCase();
+            const highNewValueContainer = (Math.floor(newValueContainer / 0x100000000) & 0xFFFFFFFF>>>0);
+            const highHexValue = (highNewValueContainer >>> 0).toString(16).toLowerCase();
+            const highWriteCmd = `monitor memU32 ${highAddr} 0x${highHexValue}`;
+            this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield 64-bit high] Writing: ${highWriteCmd}\n`);
+            this.miDebugger.sendRaw(highWriteCmd);
+        }
     }
 
     private quitting = false;

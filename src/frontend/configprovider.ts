@@ -7,6 +7,8 @@ import { ADAPTER_DEBUG_MODE, ChainedConfigurations, ChainedEvents, CortexDebugKe
 import { CDebugChainedSessionItem, CDebugSession } from './cortex_debug_session';
 import * as path from 'path';
 
+export { CortexDebugAdapterDescriptorFactory };
+
 // Please confirm these names with OpenOCD source code. Their docs are incorrect as to case
 const OPENOCD_VALID_RTOS: string[] = [
     'auto',
@@ -25,6 +27,25 @@ const OPENOCD_VALID_RTOS: string[] = [
     'Zephyr'
 ];
 const JLINK_VALID_RTOS: string[] = ['Azure', 'ChibiOS', 'embOS', 'FreeRTOS', 'NuttX', 'Zephyr'];
+
+class CortexDebugAdapterDescriptorFactory implements vscode.DebugAdapterDescriptorFactory {
+    createDebugAdapterDescriptor(
+        session: vscode.DebugSession,
+        executable: vscode.DebugAdapterExecutable | undefined
+    ): vscode.ProviderResult<vscode.DebugAdapterDescriptor> {
+        // Check two ways to enable remote debug server:
+        // 1. Environment variable (for development)
+        // 2. Configuration in launch.json (debugServerPort)
+        const debugServerPort = process.env.CORTEX_DEBUG_SERVER_PORT || session.configuration.debugServerPort;
+        if (debugServerPort) {
+            const port = parseInt(debugServerPort, 10);
+            console.log(`Cortex-Debug: Connecting to debug server at port ${port}`);
+            return new vscode.DebugAdapterServer(port);
+        }
+        // Default: use the executable specified in package.json
+        return executable;
+    }
+}
 
 export class CortexDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
     constructor(private context: vscode.ExtensionContext) {}

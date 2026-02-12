@@ -49,6 +49,7 @@ export class LiveVariableNode extends BaseNode {
         return this.address;
     }
 
+
     public getChildren(): LiveVariableNode[] {
         if (!this.parent && (!this.children || !this.children.length)) {
             return [new LiveVariableNodeMsg(this)];
@@ -679,7 +680,7 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
                     variablesReference: node.getVariablesReference(),
                     expr: node.getExpr(),
                     address: node.getAddress(),
-                    type: node.getType()
+                    type: node.getType(),
                 });
 
                 if (response.success === false) {

@@ -1,4 +1,4 @@
-import { IBackend, Stack, Variable, VariableObject, MIError,
+import { IBackend, Stack, Variable, VariableObject, MIError, BitfieldInfo,
     OurInstructionBreakpoint, OurDataBreakpoint, OurSourceBreakpoint } from '../backend';
 import * as ChildProcess from 'child_process';
 import { EventEmitter } from 'events';
@@ -66,6 +66,7 @@ export class MI2 extends EventEmitter implements IBackend {
     protected actuallyStarted = false;
     protected isExiting = false;
     // public gdbVarsPromise: Promise<MINode> = null;
+    protected structTypeInfoCache: Map<string, StructMemberInfo> = new Map();
 
     constructor(public application: string, public args: string[], public forLiveGdb = false) {
         super();
@@ -1164,6 +1165,81 @@ export class MI2 extends EventEmitter implements IBackend {
         });
     }
 
+    /**
+     * Get struct type information by parsing ptype /o output
+     * Results are cached for performance
+     * @param typeName Name of the struct/union type
+     * @returns StructMemberInfo with member information including bitfield offsets
+     */
+    public async getStructTypeInfo(structNume:string,typeName: string): Promise<StructMemberInfo | null> {
+        this.log('log', `DebugLiveWatch: [getStructTypeInfo] Getting type info for ${typeName}\n`);
+
+        // Check cache first
+        if (this.structTypeInfoCache.has(`${structNume}.${typeName}`)) {
+            this.log('log', `DebugLiveWatch: [getStructTypeInfo] Cache hit for ${structNume}.${typeName}\n`);
+            return this.structTypeInfoCache.get(`${structNume}.${typeName}`);
+        }
+
+        try {
+            // Send ptype /o command to get struct layout with offsets
+            const cmd = `interpreter-exec console "ptype /o ${structNume}"`;
+            this.log('log', `DebugLiveWatch: [getStructTypeInfo] Sending command: ${cmd}\n`);
+            const result = await this.sendCommand(cmd, false, true);
+
+            // Parse the output
+            const typeInfo = this.parsePtypeOutput(result,structNume,typeName);
+            if (typeInfo) {
+                this.structTypeInfoCache.set(`${structNume}.${typeName}`, typeInfo);
+            }
+            return typeInfo;
+        } catch (e) {
+            this.log('stderr', `DebugLiveWatch: [getStructTypeInfo] Error getting type info for ${typeName}: ${e}\n`);
+            return null;
+        }
+    }
+
+    /**
+     * Parse ptype /o output to find a specific bitfield member
+     * Actual GDB ptype /o format:
+     *   /*      0: 5   |       4 *\/            volatile uint32_t DQS_LAT_EN : 1;
+     *   byte_offset: bit_offset | container_size    type memberName : bitWidth;
+     */
+    private parsePtypeOutput(node: MINode, structNume: string, typeName: string): StructMemberInfo | null {
+        this.log('log', `DebugLiveWatch: [parsePtypeOutput] Parsing output for ${structNume}.${typeName}\n`);
+
+        const output = node.output || '';
+        if (!output) {
+            this.log('stderr', `DebugLiveWatch: [parsePtypeOutput] No output to parse\n`);
+            return null;
+        }
+
+        // Match: /* <byteOff>: <bitOff> | <size> */ ... <name> : <bitWidth>;
+        const regex = /\/\*\s+(\d+):\s+(\d+)\s+\|\s+(\d+)\s+\*\/.*\s+(\w+)\s*:\s*(\d+)\s*;/;
+
+        const lines = output.split('\n');
+        for (const line of lines) {
+            const m = regex.exec(line);
+            if (m && m[4] === typeName) {
+                const byteOffset = parseInt(m[1]);
+                const bitOffsetInByte = parseInt(m[2]);
+                const containerSize = parseInt(m[3]);
+                const bitWidth = parseInt(m[5]);
+                const bitOffset = byteOffset * 8 + bitOffsetInByte;
+
+                this.log('log', `DebugLiveWatch: [parsePtypeOutput] Found ${typeName}: bitOffset=${bitOffset}, bitWidth=${bitWidth}, containerSize=${containerSize}\n`);
+
+                return {
+                    name: typeName,
+                    bitOffset: bitOffset,
+                    bitWidth: bitWidth
+                };
+            }
+        }
+
+        this.log('log', `DebugLiveWatch: [parsePtypeOutput] Member '${typeName}' not found\n`);
+        return null;
+    }
+
 }
 
 interface SendCommaindIF {
@@ -1174,3 +1250,17 @@ interface SendCommaindIF {
     resolve: any;
     reject: any;
 }
+
+// Types for struct type info parsing
+export interface StructMemberInfo {
+    name: string;
+    bitOffset?: number;    // bit offset within container
+    bitWidth?: number;     // width in bits
+}
+
+/*
+export interface StructTypeInfo {
+    typeName: string;
+    members: Map<string, StructMemberInfo>;
+}
+*/

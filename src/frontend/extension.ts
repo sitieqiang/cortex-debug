@@ -11,7 +11,7 @@ import {
 import { MemoryContentProvider } from './memory_content_provider';
 import Reporting from '../reporting';
 
-import { CortexDebugConfigurationProvider } from './configprovider';
+import { CortexDebugConfigurationProvider, CortexDebugAdapterDescriptorFactory } from './configprovider';
 import { JLinkSocketRTTSource, SocketRTTSource, SocketSWOSource, PeMicroSocketSource } from './swo/sources/socket';
 import { FifoSWOSource } from './swo/sources/fifo';
 import { FileSWOSource } from './swo/sources/file';
@@ -104,6 +104,7 @@ export class CortexDebugExtension {
             }),
 
             vscode.debug.registerDebugConfigurationProvider('cortex-debug', new CortexDebugConfigurationProvider(context)),
+            vscode.debug.registerDebugAdapterDescriptorFactory('cortex-debug', new CortexDebugAdapterDescriptorFactory()),
 
             this.liveWatchTreeView,
             this.liveWatchTreeView.onDidExpandElement((e) => {
