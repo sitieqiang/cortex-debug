@@ -985,6 +985,20 @@ export class MI2 extends EventEmitter implements IBackend {
         const keywords = ['private', 'protected', 'public'];
         const children = res.result('children') || [];
         const omg: VariableObject[] = [];
+
+        // Pre-fetch parent's path expression once for all children.
+        // GDB's var-info-path-expression is buggy for bitfield children in struct arrays,
+        // but the parent's path expression is reliable. We use it to construct child paths.
+        let parentPath: string | null = null;
+        if (fetchAddresses) {
+            try {
+                const parentPathExpr = await this.sendCommand(`var-info-path-expression "${name}"`);
+                parentPath = parentPathExpr.result('path_expr');
+            } catch (e) {
+                // Parent path not available, address fetching will be skipped
+            }
+        }
+
         for (const item of children) {
             const child = new VariableObject(parent, item[1]);
             if (child.exp.startsWith('<anonymous ')) {
@@ -993,22 +1007,32 @@ export class MI2 extends EventEmitter implements IBackend {
                 omg.push(... await this.varListChildren(parent, child.name, fetchAddresses));
             } else {
                 // Only fetch addresses if explicitly requested (for live watch)
-                // This is expensive, so we don't do it for normal variable watching
-                if (fetchAddresses) {
+                if (fetchAddresses && parentPath) {
+                    // Construct child's full path from parent path + child expression.
+                    // This avoids GDB's var-info-path-expression bug where bitfield children
+                    // in struct arrays all resolve to the wrong (same) path expression.
+                    const isArrayIndex = /^\d+$/.test(child.exp);
+                    const childFullPath = isArrayIndex
+                        ? `(${parentPath})[${child.exp}]`
+                        : `(${parentPath}).${child.exp}`;
                     try {
-                        // Try to get the address using the variable object's path expression
-                        const pathExpr = await this.sendCommand(`var-info-path-expression "${child.name}"`);
-                        const path = pathExpr.result('path_expr');
-                        if (path) {
-                            const addrResp = await this.sendCommand(`data-evaluate-expression "&(${path})"`);
+                        const addrResp = await this.sendCommand(`data-evaluate-expression "&(${childFullPath})"`);
+                        const addrValue = addrResp.result('value');
+                        if (addrValue && addrValue.startsWith('0x')) {
+                            child.address = addrValue;
+                        }
+                    } catch (e) {
+                        // For bitfields, & is invalid in C. Use parent's address as the container address.
+                        // The bitfield offset within the container is resolved separately via getStructTypeInfo.
+                        try {
+                            const addrResp = await this.sendCommand(`data-evaluate-expression "&(${parentPath})"`);
                             const addrValue = addrResp.result('value');
                             if (addrValue && addrValue.startsWith('0x')) {
                                 child.address = addrValue;
                             }
+                        } catch (e2) {
+                            // Silently ignore
                         }
-                    } catch (e) {
-                        // Address might not be available for all variables (e.g., register variables, bit fields)
-                        // Silently ignore
                     }
                 }
                 omg.push(child);
