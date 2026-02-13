@@ -422,7 +422,7 @@
             {
                 "command": "cortex-debug.liveWatch.editExpr",
                 "title": "Edit expression",
-                "icon": "$(edit)"
+                "icon": "$(rename)"
             },
             {
                 "command": "cortex-debug.liveWatch.moveUp",
