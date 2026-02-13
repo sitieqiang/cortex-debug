@@ -471,7 +471,7 @@ export class LiveWatchMonitor {
     }
 
     public async setVariableRequest(response: DebugProtocol.Response, args: any): Promise<void> {
-        this.mainSession.handleMsg('stdout', `DebugLiveWatch: setVariableRequest called - address='${args.address}', type='${args.type}'\n`);
+        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: setVariableRequest called - address='${args.address}', type='${args.type}'\n`);
         try {
             const name = args.name;
             const value = args.value;
@@ -490,7 +490,7 @@ export class LiveWatchMonitor {
                     const dynamicBitfieldInfo = await this.getBitfieldInfoForExpr(expr);
                     if (dynamicBitfieldInfo) {
                         bitfieldInfo = dynamicBitfieldInfo;
-                        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [setVariableRequest] Dynamic bitfield info: ${JSON.stringify(bitfieldInfo)}\n`);
+                        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [setVariableRequest] Dynamic bitfield info: ${JSON.stringify(bitfieldInfo)}\n`);
                     }
                 }
 
@@ -498,10 +498,10 @@ export class LiveWatchMonitor {
                 await this.writeViaMonitor(address, value, type, expr, bitfieldInfo);
                 response.body = { value: value };
                 response.success = true;
-                this.mainSession.sendResponse(response);
+                // this.mainSession.sendResponse(response);
 
                 if (this.mainSession.args.showDevDebugOutput) {
-                    this.mainSession.handleMsg('log', `DebugLiveWatch: Monitor write func writeViaMonitor ${address} = ${value}\n`);
+                    // this.mainSession.handleMsg('log', `DebugLiveWatch: Monitor write func writeViaMonitor ${address} = ${value}\n`);
                 }
                 return;
             }
@@ -539,15 +539,16 @@ export class LiveWatchMonitor {
                 value: res.result('value')
             };
             response.success = true;
-            this.mainSession.sendResponse(response);
-
+            // this.mainSession.sendResponse(response);
+            /*
             if (this.mainSession.args.showDevDebugOutput) {
                 this.mainSession.handleMsg('log', `LiveGDB: Set ${name} = ${value}\n`);
             }
+            */
         } catch (err) {
             response.success = false;
             response.message = err.toString();
-            this.mainSession.sendErrorResponsePub(response, 1, err.toString());
+            // this.mainSession.sendErrorResponsePub(response, 1, err.toString());
         }
     }
 
@@ -565,7 +566,7 @@ export class LiveWatchMonitor {
      * @returns BitfieldInfo if the variable is a bitfield, null otherwise
      */
     private async getBitfieldInfoForExpr(expr: string): Promise<BitfieldInfo | null> {
-        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Checking expr: ${expr}\n`);
+        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Checking expr: ${expr}\n`);
 
         try {
             // Extract parent and member if expr contains '.' or '->'
@@ -574,7 +575,7 @@ export class LiveWatchMonitor {
             const separatorIndex = Math.max(dotIndex, arrowIndex);
 
             if (separatorIndex === -1) {
-                this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] No parent/child separator found\n`);
+                // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] No parent/child separator found\n`);
                 return null;
             }
 
@@ -582,27 +583,27 @@ export class LiveWatchMonitor {
             const parentExpr = expr.substring(0, separatorIndex);
             const memberName = expr.substring(separatorIndex + (arrowIndex !== -1 ? 2 : 1));
 
-            this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Parent: ${parentExpr}, Member: ${memberName}\n`);
+            // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Parent: ${parentExpr}, Member: ${memberName}\n`);
 
             
 
             // Get struct type info with offsets
             const structInfo = await this.miDebugger.getStructTypeInfo(parentExpr,memberName);
             if (!structInfo) {
-                this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] No struct info found for ${parentExpr}\n`);
+                // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] No struct info found for ${parentExpr}\n`);
                 return null;
             }
 
 
             const memberInfo = structInfo;
             if (memberInfo) {
-                this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Member found: ${JSON.stringify(memberInfo)}\n`);
+                // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Member found: ${JSON.stringify(memberInfo)}\n`);
 
                 // Check if this is a bitfield (has bitWidth)
                 if (memberInfo.bitWidth !== undefined && memberInfo.bitWidth > 0) {
 
 
-                    this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Found bitfield: bitOffset=${memberInfo.bitOffset}, bitWidth=${memberInfo.bitWidth}\n`);
+                    // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Found bitfield: bitOffset=${memberInfo.bitOffset}, bitWidth=${memberInfo.bitWidth}\n`);
 
                     return {
                         isBitfield: true,
@@ -611,15 +612,15 @@ export class LiveWatchMonitor {
                         memberPath: expr
                     };
                 } else {
-                    this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Member is not a bitfield\n`);
+                    // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Member is not a bitfield\n`);
                 }
             } else {
-                this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Member '${memberName}' not found in struct. \n`);
+                // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Member '${memberName}' not found in struct. \n`);
             }
 
             return null;
         } catch (e) {
-            this.mainSession.handleMsg('stderr', `DebugLiveWatch: [getBitfieldInfoForExpr] Error: ${e}\n`);
+            // this.mainSession.handleMsg('stderr', `DebugLiveWatch: [getBitfieldInfoForExpr] Error: ${e}\n`);
             return null;
         }
     }
@@ -640,8 +641,8 @@ export class LiveWatchMonitor {
             address = address.substring(0, spaceIndex);
         }
 
-        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeViaMonitor] address=${address}, value=${value}, type=${type}, expr=${expr}\n`);
-        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeViaMonitor] bitfieldInfo=${JSON.stringify(bitfieldInfo)}\n`);
+        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeViaMonitor] address=${address}, value=${value}, type=${type}, expr=${expr}\n`);
+        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeViaMonitor] bitfieldInfo=${JSON.stringify(bitfieldInfo)}\n`);
 
         const lowerType = type.toLowerCase();
         const isFloat = lowerType.includes('float') && !lowerType.includes('double');
@@ -655,7 +656,7 @@ export class LiveWatchMonitor {
         if (bitfieldInfo && bitfieldInfo.isBitfield && bitfieldInfo.bitOffset !== undefined && bitfieldInfo.bitWidth !== undefined) {
             const numValue = parseInt(value, value.startsWith('0x') ? 16 : 10);
             if (isNaN(numValue)) { throw new Error(`Invalid value: ${value}`); }
-            this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeViaMonitor] BITFIELD detected, calling writeBitfield\n`);
+            // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeViaMonitor] BITFIELD detected, calling writeBitfield\n`);
             await this.writeBitfield(size, address, numValue, bitfieldInfo);
             return;
         }
@@ -669,7 +670,7 @@ export class LiveWatchMonitor {
             new DataView(buf).setFloat32(0, floatVal, true); // little-endian
             const hexValue = new DataView(buf).getUint32(0, true).toString(16).toLowerCase();
             const cmd = `monitor memU32 ${address} 0x${hexValue}`;
-            this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write float] cmd='${cmd}'\n`);
+            // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write float] cmd='${cmd}'\n`);
             await this.miDebugger.sendCommand(`interpreter-exec console "${cmd}"`);
             return;
         }
@@ -684,12 +685,12 @@ export class LiveWatchMonitor {
             const high32 = new DataView(buf).getUint32(4, true);
 
             const cmdLow = `monitor memU32 ${address} 0x${low32.toString(16).toLowerCase()}`;
-            this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write double low] cmd='${cmdLow}'\n`);
+            // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write double low] cmd='${cmdLow}'\n`);
             await this.miDebugger.sendCommand(`interpreter-exec console "${cmdLow}"`);
 
             const addrHigh = '0x' + (parseInt(address, 16) + 4).toString(16).toLowerCase();
             const cmdHigh = `monitor memU32 ${addrHigh} 0x${high32.toString(16).toLowerCase()}`;
-            this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write double high] cmd='${cmdHigh}'\n`);
+            // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write double high] cmd='${cmdHigh}'\n`);
             await this.miDebugger.sendCommand(`interpreter-exec console "${cmdHigh}"`);
             return;
         }
@@ -719,7 +720,7 @@ export class LiveWatchMonitor {
         else if (size === 2) { monitorCmd = 'memU16'; }
 
         const cmd = `monitor ${monitorCmd} ${address} 0x${hexValue}`;
-        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write] cmd='${cmd}'\n`);
+        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write] cmd='${cmd}'\n`);
         await this.miDebugger.sendCommand(`interpreter-exec console "${cmd}"`);
 
         if (size === 8) {
@@ -727,7 +728,7 @@ export class LiveWatchMonitor {
             const high32 = Number((bigValue >> BigInt(32)) & MASK32) >>> 0;
             const highHexValue = high32.toString(16).toLowerCase();
             const writeCmd = `monitor memU32 ${addrHigh} 0x${highHexValue}`;
-            this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write 64-bit high] Writing: ${writeCmd}\n`);
+            // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write 64-bit high] Writing: ${writeCmd}\n`);
             await this.miDebugger.sendCommand(`interpreter-exec console "${writeCmd}"`);
         }
     }
@@ -742,7 +743,7 @@ export class LiveWatchMonitor {
         const bitOffset = bitfieldInfo.bitOffset!;
         const bitWidth = bitfieldInfo.bitWidth!;
 
-        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] addr=${address}, offset=${bitOffset}, width=${bitWidth}, value=${newValue}, containerSize=${containerSize}\n`);
+        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] addr=${address}, offset=${bitOffset}, width=${bitWidth}, value=${newValue}, containerSize=${containerSize}\n`);
 
         // Step 1: Read current value from memory
         let monitorCmd = 'memU32';
@@ -754,7 +755,7 @@ export class LiveWatchMonitor {
 
         // Send read command using GDB MI data-read-memory
         const readCmd = `data-read-memory-bytes ${address} ${containerSize}`;
-        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] Reading memory: ${readCmd}\n`);
+        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] Reading memory: ${readCmd}\n`);
 
         const readResp = await this.miDebugger.sendCommand(readCmd);
         const memoryBlock = readResp.result('memory')[0];
@@ -762,7 +763,7 @@ export class LiveWatchMonitor {
         if (!contentsEntry) { throw new Error('Failed to read memory contents'); }
         const memoryData = contentsEntry[1] as string;
 
-        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] Raw memory data: ${memoryData}\n`);
+        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] Raw memory data: ${memoryData}\n`);
 
         // Parse hex bytes to integer (little-endian)
         // i increments by 2 (2 hex chars per byte), so byte index = i/2, shift = i*4
@@ -772,25 +773,25 @@ export class LiveWatchMonitor {
             currentValue |= (byte << i*4);
         }
 
-        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] Current container value = 0x${currentValue.toString(16)}\n`);
+        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] Current container value = 0x${currentValue.toString(16)}\n`);
 
         // Step 2: Clear the target bitfield and set new value
         // Create mask for the bitfield
         const mask = ((1 << bitWidth) - 1) << bitOffset;
         const maskedValue = (newValue & ((1 << bitWidth) - 1)) << bitOffset;
 
-        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] mask=0x${mask.toString(16)}, maskedValue=0x${maskedValue.toString(16)}\n`);
+        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] mask=0x${mask.toString(16)}, maskedValue=0x${maskedValue.toString(16)}\n`);
 
         // Clear target bits and set new value
         const newValueContainer = (currentValue & ~mask) | maskedValue;
 
-        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] New container value = 0x${newValueContainer.toString(16)}\n`);
+        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] New container value = 0x${newValueContainer.toString(16)}\n`);
 
         const lowNewValueContainer = (newValueContainer>>>0) & 0xFFFFFFFF;
         // Step 3: Write back the modified value
         const hexValue = (lowNewValueContainer >>> 0).toString(16).toLowerCase();
         const writeCmd = `monitor ${monitorCmd} ${address} 0x${hexValue}`;
-        this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] Writing: ${writeCmd}\n`);
+        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] Writing: ${writeCmd}\n`);
         await this.miDebugger.sendCommand(`interpreter-exec console "${writeCmd}"`);
         if (containerSize === 8) {
             const addrNum = parseInt(address, 16) + 4;
@@ -798,7 +799,7 @@ export class LiveWatchMonitor {
             const highNewValueContainer = (Math.floor(newValueContainer / 0x100000000) & 0xFFFFFFFF>>>0);
             const highHexValue = (highNewValueContainer >>> 0).toString(16).toLowerCase();
             const highWriteCmd = `monitor memU32 ${highAddr} 0x${highHexValue}`;
-            this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield 64-bit high] Writing: ${highWriteCmd}\n`);
+            // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield 64-bit high] Writing: ${highWriteCmd}\n`);
             await this.miDebugger.sendCommand(`interpreter-exec console "${highWriteCmd}"`);
         }
     }

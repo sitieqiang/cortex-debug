@@ -1200,7 +1200,7 @@ export class MI2 extends EventEmitter implements IBackend {
 
         // Check cache first
         if (this.structTypeInfoCache.has(`${structNume}.${typeName}`)) {
-            this.log('log', `DebugLiveWatch: [getStructTypeInfo] Cache hit for ${structNume}.${typeName}\n`);
+            // this.log('log', `DebugLiveWatch: [getStructTypeInfo] Cache hit for ${structNume}.${typeName}\n`);
             return this.structTypeInfoCache.get(`${structNume}.${typeName}`);
         }
 
@@ -1250,7 +1250,7 @@ export class MI2 extends EventEmitter implements IBackend {
                 const bitWidth = parseInt(m[5]);
                 const bitOffset = byteOffset * 8 + bitOffsetInByte;
 
-                this.log('log', `DebugLiveWatch: [parsePtypeOutput] Found ${typeName}: bitOffset=${bitOffset}, bitWidth=${bitWidth}, containerSize=${containerSize}\n`);
+                // this.log('log', `DebugLiveWatch: [parsePtypeOutput] Found ${typeName}: bitOffset=${bitOffset}, bitWidth=${bitWidth}, containerSize=${containerSize}\n`);
 
                 return {
                     name: typeName,
@@ -1260,7 +1260,7 @@ export class MI2 extends EventEmitter implements IBackend {
             }
         }
 
-        this.log('log', `DebugLiveWatch: [parsePtypeOutput] Member '${typeName}' not found\n`);
+        // this.log('log', `DebugLiveWatch: [parsePtypeOutput] Member '${typeName}' not found\n`);
         return null;
     }
 
