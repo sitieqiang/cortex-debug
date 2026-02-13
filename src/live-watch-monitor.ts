@@ -670,7 +670,7 @@ export class LiveWatchMonitor {
             const hexValue = new DataView(buf).getUint32(0, true).toString(16).toLowerCase();
             const cmd = `monitor memU32 ${address} 0x${hexValue}`;
             this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write float] cmd='${cmd}'\n`);
-            this.miDebugger.sendRaw(cmd);
+            await this.miDebugger.sendCommand(`interpreter-exec console "${cmd}"`);
             return;
         }
 
@@ -685,12 +685,12 @@ export class LiveWatchMonitor {
 
             const cmdLow = `monitor memU32 ${address} 0x${low32.toString(16).toLowerCase()}`;
             this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write double low] cmd='${cmdLow}'\n`);
-            this.miDebugger.sendRaw(cmdLow);
+            await this.miDebugger.sendCommand(`interpreter-exec console "${cmdLow}"`);
 
             const addrHigh = '0x' + (parseInt(address, 16) + 4).toString(16).toLowerCase();
             const cmdHigh = `monitor memU32 ${addrHigh} 0x${high32.toString(16).toLowerCase()}`;
             this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write double high] cmd='${cmdHigh}'\n`);
-            this.miDebugger.sendRaw(cmdHigh);
+            await this.miDebugger.sendCommand(`interpreter-exec console "${cmdHigh}"`);
             return;
         }
 
@@ -720,7 +720,7 @@ export class LiveWatchMonitor {
 
         const cmd = `monitor ${monitorCmd} ${address} 0x${hexValue}`;
         this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write] cmd='${cmd}'\n`);
-        this.miDebugger.sendRaw(cmd);
+        await this.miDebugger.sendCommand(`interpreter-exec console "${cmd}"`);
 
         if (size === 8) {
             const addrHigh = '0x' + (parseInt(address, 16) + 4).toString(16).toLowerCase();
@@ -728,7 +728,7 @@ export class LiveWatchMonitor {
             const highHexValue = high32.toString(16).toLowerCase();
             const writeCmd = `monitor memU32 ${addrHigh} 0x${highHexValue}`;
             this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write 64-bit high] Writing: ${writeCmd}\n`);
-            this.miDebugger.sendRaw(writeCmd);
+            await this.miDebugger.sendCommand(`interpreter-exec console "${writeCmd}"`);
         }
     }
 
@@ -791,7 +791,7 @@ export class LiveWatchMonitor {
         const hexValue = (lowNewValueContainer >>> 0).toString(16).toLowerCase();
         const writeCmd = `monitor ${monitorCmd} ${address} 0x${hexValue}`;
         this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] Writing: ${writeCmd}\n`);
-        this.miDebugger.sendRaw(writeCmd);
+        await this.miDebugger.sendCommand(`interpreter-exec console "${writeCmd}"`);
         if (containerSize === 8) {
             const addrNum = parseInt(address, 16) + 4;
             const highAddr = '0x' + addrNum.toString(16).toLowerCase();
@@ -799,7 +799,7 @@ export class LiveWatchMonitor {
             const highHexValue = (highNewValueContainer >>> 0).toString(16).toLowerCase();
             const highWriteCmd = `monitor memU32 ${highAddr} 0x${highHexValue}`;
             this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield 64-bit high] Writing: ${highWriteCmd}\n`);
-            this.miDebugger.sendRaw(highWriteCmd);
+            await this.miDebugger.sendCommand(`interpreter-exec console "${highWriteCmd}"`);
         }
     }
 

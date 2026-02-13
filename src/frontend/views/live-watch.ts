@@ -686,8 +686,10 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
                 if (response.success === false) {
                     vscode.window.showErrorMessage(`Failed to set value: ${response.message || 'Unknown error'}`);
                 } else {
-                    // Refresh to show the updated value
+                    // Write successful - refresh to show updated value
                     this.refresh(LiveWatchTreeProvider.session);
+					//fix bug patch must two refresh ui vaile will be true
+					this.refresh(LiveWatchTreeProvider.session);
                 }
             } catch (err) {
                 vscode.window.showErrorMessage(`Failed to set value: ${err.toString()}`);
