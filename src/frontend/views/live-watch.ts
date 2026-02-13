@@ -18,6 +18,7 @@ export class LiveVariableNode extends BaseNode {
     protected session: vscode.DebugSession | undefined;        // This is transient
     protected children: LiveVariableNode[] | undefined;
     protected prevValue: string = '';
+    protected address: string = '';    // Memory address of the variable
     constructor(
         parent: LiveVariableNode | undefined,
         protected name: string,
@@ -31,6 +32,23 @@ export class LiveVariableNode extends BaseNode {
     public getExpr(): string {
         return this.expr;
     }
+
+    public getValue(): string {
+        return this.value;
+    }
+
+    public getType(): string {
+        return this.type;
+    }
+
+    public getVariablesReference(): number {
+        return this.variablesReference;
+    }
+
+    public getAddress(): string {
+        return this.address;
+    }
+
 
     public getChildren(): LiveVariableNode[] {
         if (!this.parent && (!this.children || !this.children.length)) {
@@ -78,11 +96,15 @@ export class LiveVariableNode extends BaseNode {
 
         const parts = this.name.startsWith('\'') && this.isRootChild() ? this.name.split('\'::') : [this.name];
         const name = parts.pop();
+        let labelStr = name + ': ' + (this.value || 'not available');
+        if (this.address) {
+            labelStr += '\t@ ' + this.address;
+        }
         const label: vscode.TreeItemLabel = {
-            label: name + ': ' + (this.value || 'not available')
+            label: labelStr
         };
         if (this.prevValue && (this.prevValue !== this.value)) {
-            label.highlights = [[name.length + 2, label.label.length]];
+            label.highlights = [[name.length + 2, name.length + 2 + (this.value || 'not available').length]];
         }
         this.prevValue = this.value;
 
@@ -93,7 +115,11 @@ export class LiveVariableNode extends BaseNode {
             const cwd = this.session?.configuration?.cwd;
             file = cwd ? getPathRelative(cwd, file) : file;
         }
-        item.tooltip = (file ? 'File: ' + file + '\n' : '') + this.type;
+        let tooltip = (file ? 'File: ' + file + '\n' : '') + this.type;
+        if (this.address) {
+            tooltip += '\nAddress: ' + this.address;
+        }
+        item.tooltip = tooltip;
         return item;
     }
 
@@ -167,7 +193,7 @@ export class LiveVariableNode extends BaseNode {
     public reset(valuesToo = true) {
         this.session = undefined;
         if (valuesToo) {
-            this.value = this.type = this.prevValue = '';
+            this.value = this.type = this.prevValue = this.address = '';
             this.variablesReference = 0;
         }
         for (const child of this.children || []) {
@@ -210,6 +236,7 @@ export class LiveVariableNode extends BaseNode {
                             variable.value || '',
                             variable.type || '',        // This will become tooltip
                             variable.variablesReference ?? 0);
+                        ch.address = variable.address || '';
                         const oldState = oldStateMap[ch.name];
                         if (oldState) {
                             ch.expanded = oldState.expanded && (ch.variablesReference > 0);
@@ -268,6 +295,7 @@ export class LiveVariableNode extends BaseNode {
                         this.variablesReference = result.variablesReference ?? 0;
                         this.namedVariables = result.namedVariables ?? 0;
                         this.indexedVariables = result.indexedVariables ?? 0;
+                        this.address = result.address || '';
                         if (oldType !== this.type) {
                             this.children = this.variablesReference ? [] : undefined;
                         }
@@ -356,7 +384,7 @@ class LiveVariableNodeMsg extends LiveVariableNode {
             label: tmp + (this.empty ? ', and use the \'+\' button above to add new expressions' : '')
         };
         const item = new TreeItem(label, state);
-        item.contextValue = this.isRootChild() ? 'expression' : 'field';
+        item.contextValue = 'message';  // Use a different context value to avoid showing edit menu
         item.tooltip = '~' + label.label + '~';
         return item;
     }
@@ -623,6 +651,54 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
         const parent = node?.getParent() as LiveVariableNode;
         if (parent && parent.moveDownChild(node)) {
             this.fire();
+        }
+    }
+
+    public async editValue(node: LiveVariableNode) {
+        if (!LiveWatchTreeProvider.session) {
+            vscode.window.showWarningMessage('No active debug session');
+            return;
+        }
+
+        const currentValue = node.getValue();
+        const currentType = node.getType();
+
+        const opts: vscode.InputBoxOptions = {
+            placeHolder: 'Enter new value',
+            ignoreFocusOut: true,
+            value: currentValue,
+            prompt: `Edit value for ${node.getName()} (${currentType})`,
+            validateInput: (value: string) => {
+                if (!value || value.trim() === '') {
+                    return 'Value cannot be empty';
+                }
+                return null;
+            }
+        };
+
+        const result = await vscode.window.showInputBox(opts);
+        if (result !== undefined && result !== currentValue) {
+            try {
+                const response = await LiveWatchTreeProvider.session.customRequest('liveSetVariable', {
+                    name: node.getName(),
+                    value: result,
+                    variablesReference: node.getVariablesReference(),
+                    expr: node.getExpr(),
+                    address: node.getAddress(),
+                    type: node.getType(),
+                });
+
+                if (response.success === false) {
+                    vscode.window.showErrorMessage(`Failed to set value: ${response.message || 'Unknown error'}`);
+                } else {
+                    // Write successful - refresh to show updated value
+                    this.refresh(LiveWatchTreeProvider.session);
+                    // fix bug patch must two refresh ui vaile will be true
+                    this.refresh(LiveWatchTreeProvider.session);
+                }
+            } catch (err) {
+                vscode.window.showErrorMessage(`Failed to set value: ${err.toString()}`);
+            }
         }
     }
 

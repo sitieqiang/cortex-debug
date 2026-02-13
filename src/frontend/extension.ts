@@ -12,7 +12,7 @@ import {
 import { MemoryContentProvider } from './memory_content_provider';
 import Reporting from '../reporting';
 
-import { CortexDebugConfigurationProvider } from './configprovider';
+import { CortexDebugConfigurationProvider, CortexDebugAdapterDescriptorFactory } from './configprovider';
 import { JLinkSocketRTTSource, SocketRTTSource, SocketSWOSource, PeMicroSocketSource } from './swo/sources/socket';
 import { FifoSWOSource } from './swo/sources/fifo';
 import { FileSWOSource } from './swo/sources/file';
@@ -84,6 +84,7 @@ export class CortexDebugExtension {
             vscode.commands.registerCommand('cortex-debug.liveWatch.addToLiveWatch', this.addToLiveWatch.bind(this)),
             vscode.commands.registerCommand('cortex-debug.liveWatch.moveUp', this.moveUpLiveWatchExpr.bind(this)),
             vscode.commands.registerCommand('cortex-debug.liveWatch.moveDown', this.moveDownLiveWatchExpr.bind(this)),
+            vscode.commands.registerCommand('cortex-debug.liveWatch.editValue', this.editLiveWatchValue.bind(this)),
 
             vscode.workspace.onDidChangeConfiguration(this.settingsChanged.bind(this)),
             vscode.debug.onDidReceiveDebugSessionCustomEvent(this.receivedCustomEvent.bind(this)),
@@ -97,6 +98,7 @@ export class CortexDebugExtension {
             }),
 
             vscode.debug.registerDebugConfigurationProvider('cortex-debug', new CortexDebugConfigurationProvider(context)),
+            vscode.debug.registerDebugAdapterDescriptorFactory('cortex-debug', new CortexDebugAdapterDescriptorFactory()),
 
             this.liveWatchTreeView,
             this.liveWatchTreeView.onDidExpandElement((e) => {
@@ -911,6 +913,10 @@ export class CortexDebugExtension {
 
     private moveDownLiveWatchExpr(node: any) {
         this.liveWatchProvider.moveDownNode(node);
+    }
+
+    private editLiveWatchValue(node: any) {
+        this.liveWatchProvider.editValue(node);
     }
 }
 

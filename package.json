@@ -438,7 +438,7 @@
             {
                 "command": "cortex-debug.liveWatch.editExpr",
                 "title": "Edit expression",
-                "icon": "$(edit)"
+                "icon": "$(rename)"
             },
             {
                 "command": "cortex-debug.liveWatch.moveUp",
@@ -449,6 +449,11 @@
                 "command": "cortex-debug.liveWatch.moveDown",
                 "title": "Move expression down",
                 "icon": "$(arrow-down)"
+            },
+            {
+                "command": "cortex-debug.liveWatch.editValue",
+                "title": "Edit Value",
+                "icon": "$(edit)"
             },
             {
                 "command": "cortex-debug.liveWatch.addToLiveWatch",
@@ -3047,6 +3052,18 @@
             "view/item/context": [
                 {
                     "command": "cortex-debug.liveWatch.editExpr",
+                    "when": "view == cortex-debug.liveWatch && viewItem == expression",
+                    "group": "inline"
+                },
+                
+
+                {
+                    "command": "cortex-debug.liveWatch.editValue",
+                    "when": "view == cortex-debug.liveWatch && viewItem == field",
+                    "group": "inline"
+                },
+                {
+                    "command": "cortex-debug.liveWatch.editValue",
                     "when": "view == cortex-debug.liveWatch && viewItem == expression",
                     "group": "inline"
                 },

@@ -1,4 +1,4 @@
-import { IBackend, Stack, Variable, VariableObject, MIError,
+import { IBackend, Stack, Variable, VariableObject, MIError, BitfieldInfo,
     OurInstructionBreakpoint, OurDataBreakpoint, OurSourceBreakpoint } from '../backend';
 import * as ChildProcess from 'child_process';
 import { EventEmitter } from 'events';
@@ -67,6 +67,7 @@ export class MI2 extends EventEmitter implements IBackend {
     protected actuallyStarted = false;
     protected isExiting = false;
     // public gdbVarsPromise: Promise<MINode> = null;
+    protected structTypeInfoCache: Map<string, StructMemberInfo> = new Map();
 
     constructor(public application: string, public args: string[], public forLiveGdb = false) {
         super();
@@ -938,7 +939,32 @@ export class MI2 extends EventEmitter implements IBackend {
         if (overrideVal) {
             result = result.map((r: string[]) => r[0] === 'value' ? ['value', overrideVal] : r);
         }
-        return new VariableObject(parent, result);
+        const varObj = new VariableObject(parent, result);
+
+        // Try to get the address of the variable for live watch
+        if (name !== '-') {
+            try {
+                // Use -data-evaluate-expression to get the address
+                const addrExpr = expression.replace(/\\"/g, '"');
+                const addrResp = await this.sendCommand(`data-evaluate-expression ${thFr} "&${addrExpr}"`);
+                const addrValue = addrResp.result('value');
+                if (addrValue && addrValue.startsWith('0x')) {
+                    // Find or add 'addr' field to result
+                    const addrIndex = result.findIndex((r: string[]) => r[0] === 'addr');
+                    if (addrIndex >= 0) {
+                        result[addrIndex][1] = addrValue;
+                    } else {
+                        result.push(['addr', addrValue]);
+    }
+                    varObj.address = addrValue;
+                }
+            } catch (e) {
+                // Address might not be available for all variables (e.g., register variables)
+                // Silently ignore
+            }
+        }
+
+        return varObj;
     }
 
     public async varEvalExpression(name: string): Promise<MINode> {
@@ -948,7 +974,7 @@ export class MI2 extends EventEmitter implements IBackend {
         return this.sendCommand(`var-evaluate-expression ${name}`);
     }
 
-    public async varListChildren(parent: number, name: string): Promise<VariableObject[]> {
+    public async varListChildren(parent: number, name: string, fetchAddresses = false): Promise<VariableObject[]> {
         if (trace) {
             this.log('stderr', 'varListChildren');
         }
@@ -957,13 +983,56 @@ export class MI2 extends EventEmitter implements IBackend {
         const keywords = ['private', 'protected', 'public'];
         const children = res.result('children') || [];
         const omg: VariableObject[] = [];
+
+        // Pre-fetch parent's path expression once for all children.
+        // GDB's var-info-path-expression is buggy for bitfield children in struct arrays,
+        // but the parent's path expression is reliable. We use it to construct child paths.
+        let parentPath: string | null = null;
+        if (fetchAddresses) {
+            try {
+                const parentPathExpr = await this.sendCommand(`var-info-path-expression "${name}"`);
+                parentPath = parentPathExpr.result('path_expr');
+            } catch (e) {
+                // Parent path not available, address fetching will be skipped
+            }
+        }
+
         for (const item of children) {
             const child = new VariableObject(parent, item[1]);
             if (child.exp.startsWith('<anonymous ')) {
-                omg.push(...await this.varListChildren(parent, child.name));
+                omg.push(... await this.varListChildren(parent, child.name, fetchAddresses));
             } else if (keywords.find((x) => x === child.exp)) {
-                omg.push(...await this.varListChildren(parent, child.name));
+                omg.push(... await this.varListChildren(parent, child.name, fetchAddresses));
             } else {
+                // Only fetch addresses if explicitly requested (for live watch)
+                if (fetchAddresses && parentPath) {
+                    // Construct child's full path from parent path + child expression.
+                    // This avoids GDB's var-info-path-expression bug where bitfield children
+                    // in struct arrays all resolve to the wrong (same) path expression.
+                    const isArrayIndex = /^\d+$/.test(child.exp);
+                    const childFullPath = isArrayIndex
+                        ? `(${parentPath})[${child.exp}]`
+                        : `(${parentPath}).${child.exp}`;
+                    try {
+                        const addrResp = await this.sendCommand(`data-evaluate-expression "&(${childFullPath})"`);
+                        const addrValue = addrResp.result('value');
+                        if (addrValue && addrValue.startsWith('0x')) {
+                            child.address = addrValue;
+                        }
+                    } catch (e) {
+                        // For bitfields, & is invalid in C. Use parent's address as the container address.
+                        // The bitfield offset within the container is resolved separately via getStructTypeInfo.
+                        try {
+                            const addrResp = await this.sendCommand(`data-evaluate-expression "&(${parentPath})"`);
+                            const addrValue = addrResp.result('value');
+                            if (addrValue && addrValue.startsWith('0x')) {
+                                child.address = addrValue;
+                            }
+                        } catch (e2) {
+                            // Silently ignore
+                        }
+                    }
+                }
                 omg.push(child);
             }
         }
@@ -1120,6 +1189,81 @@ export class MI2 extends EventEmitter implements IBackend {
             }
         });
     }
+    /**
+     * Get struct type information by parsing ptype /o output
+     * Results are cached for performance
+     * @param typeName Name of the struct/union type
+     * @returns StructMemberInfo with member information including bitfield offsets
+     */
+    public async getStructTypeInfo(structNume:string,typeName: string): Promise<StructMemberInfo | null> {
+        this.log('log', `DebugLiveWatch: [getStructTypeInfo] Getting type info for ${typeName}\n`);
+
+        // Check cache first
+        if (this.structTypeInfoCache.has(`${structNume}.${typeName}`)) {
+            this.log('log', `DebugLiveWatch: [getStructTypeInfo] Cache hit for ${structNume}.${typeName}\n`);
+            return this.structTypeInfoCache.get(`${structNume}.${typeName}`);
+}
+
+        try {
+            // Send ptype /o command to get struct layout with offsets
+            const cmd = `interpreter-exec console "ptype /o ${structNume}"`;
+            this.log('log', `DebugLiveWatch: [getStructTypeInfo] Sending command: ${cmd}\n`);
+            const result = await this.sendCommand(cmd, false, true);
+
+            // Parse the output
+            const typeInfo = this.parsePtypeOutput(result,structNume,typeName);
+            if (typeInfo) {
+                this.structTypeInfoCache.set(`${structNume}.${typeName}`, typeInfo);
+            }
+            return typeInfo;
+        } catch (e) {
+            this.log('stderr', `DebugLiveWatch: [getStructTypeInfo] Error getting type info for ${typeName}: ${e}\n`);
+            return null;
+        }
+    }
+
+    /**
+     * Parse ptype /o output to find a specific bitfield member
+     * Actual GDB ptype /o format:
+     *   /*      0: 5   |       4 *\/            volatile uint32_t DQS_LAT_EN : 1;
+     *   byte_offset: bit_offset | container_size    type memberName : bitWidth;
+     */
+    private parsePtypeOutput(node: MINode, structNume: string, typeName: string): StructMemberInfo | null {
+        this.log('log', `DebugLiveWatch: [parsePtypeOutput] Parsing output for ${structNume}.${typeName}\n`);
+
+        const output = node.output || '';
+        if (!output) {
+            this.log('stderr', `DebugLiveWatch: [parsePtypeOutput] No output to parse\n`);
+            return null;
+        }
+
+        // Match: /* <byteOff>: <bitOff> | <size> */ ... <name> : <bitWidth>;
+        const regex = /\/\*\s+(\d+):\s+(\d+)\s+\|\s+(\d+)\s+\*\/.*\s+(\w+)\s*:\s*(\d+)\s*;/;
+
+        const lines = output.split('\n');
+        for (const line of lines) {
+            const m = regex.exec(line);
+            if (m && m[4] === typeName) {
+                const byteOffset = parseInt(m[1]);
+                const bitOffsetInByte = parseInt(m[2]);
+                const containerSize = parseInt(m[3]);
+                const bitWidth = parseInt(m[5]);
+                const bitOffset = byteOffset * 8 + bitOffsetInByte;
+
+                this.log('log', `DebugLiveWatch: [parsePtypeOutput] Found ${typeName}: bitOffset=${bitOffset}, bitWidth=${bitWidth}, containerSize=${containerSize}\n`);
+
+                return {
+                    name: typeName,
+                    bitOffset: bitOffset,
+                    bitWidth: bitWidth
+                };
+            }
+        }
+
+        this.log('log', `DebugLiveWatch: [parsePtypeOutput] Member '${typeName}' not found\n`);
+        return null;
+    }
+
 }
 
 interface SendCommaindIF {
@@ -1130,3 +1274,17 @@ interface SendCommaindIF {
     resolve: any;
     reject: any;
 }
+
+// Types for struct type info parsing
+export interface StructMemberInfo {
+    name: string;
+    bitOffset?: number;    // bit offset within container
+    bitWidth?: number;     // width in bits
+}
+
+/*
+export interface StructTypeInfo {
+    typeName: string;
+    members: Map<string, StructMemberInfo>;
+}
+*/
