@@ -498,7 +498,7 @@ export class LiveWatchMonitor {
                 await this.writeViaMonitor(address, value, type, expr, bitfieldInfo);
                 response.body = { value: value };
                 response.success = true;
-                // this.mainSession.sendResponse(response);
+                this.mainSession.sendResponse(response);
 
                 if (this.mainSession.args.showDevDebugOutput) {
                     // this.mainSession.handleMsg('log', `DebugLiveWatch: Monitor write func writeViaMonitor ${address} = ${value}\n`);
@@ -539,7 +539,7 @@ export class LiveWatchMonitor {
                 value: res.result('value')
             };
             response.success = true;
-            // this.mainSession.sendResponse(response);
+            this.mainSession.sendResponse(response);
             /*
             if (this.mainSession.args.showDevDebugOutput) {
                 this.mainSession.handleMsg('log', `LiveGDB: Set ${name} = ${value}\n`);
@@ -548,7 +548,7 @@ export class LiveWatchMonitor {
         } catch (err) {
             response.success = false;
             response.message = err.toString();
-            // this.mainSession.sendErrorResponsePub(response, 1, err.toString());
+            this.mainSession.sendErrorResponsePub(response, 1, err.toString());
         }
     }
 
