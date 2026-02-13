@@ -3055,8 +3055,6 @@
                     "when": "view == cortex-debug.liveWatch && viewItem == expression",
                     "group": "inline"
                 },
-                
-
                 {
                     "command": "cortex-debug.liveWatch.editValue",
                     "when": "view == cortex-debug.liveWatch && viewItem == field",

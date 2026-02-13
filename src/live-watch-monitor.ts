@@ -461,7 +461,7 @@ export class LiveWatchMonitor {
             const expr = args.expr;
             const address = args.address;  // Variable address for direct memory write
             const type = args.type;        // Variable type for determining size
-            let bitfieldInfo ;  // Bitfield information
+            let bitfieldInfo;  // Bitfield information
 
             // Check if we should use J-Link monitor commands for direct memory write
             // This avoids triggering watchpoints/SIGTRAP
@@ -473,7 +473,8 @@ export class LiveWatchMonitor {
                     const dynamicBitfieldInfo = await this.getBitfieldInfoForExpr(expr);
                     if (dynamicBitfieldInfo) {
                         bitfieldInfo = dynamicBitfieldInfo;
-                        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [setVariableRequest] Dynamic bitfield info: ${JSON.stringify(bitfieldInfo)}\n`);
+                        // this.mainSession.handleMsg('stdout',
+                        //     `DebugLiveWatch: [setVariableRequest] Dynamic bitfield info: ${JSON.stringify(bitfieldInfo)}\n`);
                     }
                 }
 
@@ -497,7 +498,6 @@ export class LiveWatchMonitor {
             let varObjName = name;
             if (expr) {
                 // Create a hash for the expression to find the variable object name
-                const crypto = require('crypto');
                 const hasher = crypto.createHash('sha256');
                 hasher.update(expr);
                 const exprName = hasher.digest('hex');
@@ -568,15 +568,12 @@ export class LiveWatchMonitor {
 
             // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Parent: ${parentExpr}, Member: ${memberName}\n`);
 
-
-
             // Get struct type info with offsets
-            const structInfo = await this.miDebugger.getStructTypeInfo(parentExpr,memberName);
+            const structInfo = await this.miDebugger.getStructTypeInfo(parentExpr, memberName);
             if (!structInfo) {
                 // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] No struct info found for ${parentExpr}\n`);
                 return null;
             }
-
 
             const memberInfo = structInfo;
             if (memberInfo) {
@@ -584,9 +581,8 @@ export class LiveWatchMonitor {
 
                 // Check if this is a bitfield (has bitWidth)
                 if (memberInfo.bitWidth !== undefined && memberInfo.bitWidth > 0) {
-
-
-                    // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [getBitfieldInfoForExpr] Found bitfield: bitOffset=${memberInfo.bitOffset}, bitWidth=${memberInfo.bitWidth}\n`);
+                    // this.mainSession.handleMsg('stdout',
+                    //     `DebugLiveWatch: [getBitfieldInfoForExpr] Found bitfield: bitOffset=${memberInfo.bitOffset}, bitWidth=${memberInfo.bitWidth}\n`);
 
                     return {
                         isBitfield: true,
@@ -699,8 +695,11 @@ export class LiveWatchMonitor {
         const hexValue = low32.toString(16).toLowerCase();
 
         let monitorCmd = 'memU32';
-        if (size === 1) { monitorCmd = 'memU8'; }
-        else if (size === 2) { monitorCmd = 'memU16'; }
+        if (size === 1) {
+            monitorCmd = 'memU8';
+        } else if (size === 2) {
+            monitorCmd = 'memU16';
+        }
 
         const cmd = `monitor ${monitorCmd} ${address} 0x${hexValue}`;
         // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write] cmd='${cmd}'\n`);
@@ -722,11 +721,12 @@ export class LiveWatchMonitor {
      * @param newValue New value for the bitfield
      * @param bitfieldInfo Bitfield information
      */
-    private async writeBitfield(containerSize:number,address: string, newValue: number, bitfieldInfo: BitfieldInfo): Promise<void> {
-        const bitOffset = bitfieldInfo.bitOffset!;
-        const bitWidth = bitfieldInfo.bitWidth!;
+    private async writeBitfield(containerSize: number, address: string, newValue: number, bitfieldInfo: BitfieldInfo): Promise<void> {
+        const bitOffset = bitfieldInfo.bitOffset;
+        const bitWidth = bitfieldInfo.bitWidth;
 
-        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] addr=${address}, offset=${bitOffset}, width=${bitWidth}, value=${newValue}, containerSize=${containerSize}\n`);
+        // this.mainSession.handleMsg('stdout',
+        //     `DebugLiveWatch: [writeBitfield] addr=${address}, offset=${bitOffset}, width=${bitWidth}, value=${newValue}, containerSize=${containerSize}\n`);
 
         // Step 1: Read current value from memory
         let monitorCmd = 'memU32';
@@ -753,7 +753,7 @@ export class LiveWatchMonitor {
         let currentValue = 0;
         for (let i = 0; i < memoryData.length; i += 2) {
             const byte = parseInt(memoryData.substr(i, 2), 16);
-            currentValue |= (byte << i*4);
+            currentValue |= (byte << i * 4);
         }
 
         // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] Current container value = 0x${currentValue.toString(16)}\n`);
@@ -770,7 +770,7 @@ export class LiveWatchMonitor {
 
         // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] New container value = 0x${newValueContainer.toString(16)}\n`);
 
-        const lowNewValueContainer = (newValueContainer>>>0) & 0xFFFFFFFF;
+        const lowNewValueContainer = (newValueContainer >>> 0) & 0xFFFFFFFF;
         // Step 3: Write back the modified value
         const hexValue = (lowNewValueContainer >>> 0).toString(16).toLowerCase();
         const writeCmd = `monitor ${monitorCmd} ${address} 0x${hexValue}`;
@@ -779,7 +779,7 @@ export class LiveWatchMonitor {
         if (containerSize === 8) {
             const addrNum = parseInt(address, 16) + 4;
             const highAddr = '0x' + addrNum.toString(16).toLowerCase();
-            const highNewValueContainer = (Math.floor(newValueContainer / 0x100000000) & 0xFFFFFFFF>>>0);
+            const highNewValueContainer = (Math.floor(newValueContainer / 0x100000000) & 0xFFFFFFFF >>> 0);
             const highHexValue = (highNewValueContainer >>> 0).toString(16).toLowerCase();
             const highWriteCmd = `monitor memU32 ${highAddr} 0x${highHexValue}`;
             // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield 64-bit high] Writing: ${highWriteCmd}\n`);

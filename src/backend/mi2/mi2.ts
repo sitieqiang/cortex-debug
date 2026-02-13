@@ -955,7 +955,7 @@ export class MI2 extends EventEmitter implements IBackend {
                         result[addrIndex][1] = addrValue;
                     } else {
                         result.push(['addr', addrValue]);
-    }
+                    }
                     varObj.address = addrValue;
                 }
             } catch (e) {
@@ -1000,9 +1000,9 @@ export class MI2 extends EventEmitter implements IBackend {
         for (const item of children) {
             const child = new VariableObject(parent, item[1]);
             if (child.exp.startsWith('<anonymous ')) {
-                omg.push(... await this.varListChildren(parent, child.name, fetchAddresses));
+                omg.push(...await this.varListChildren(parent, child.name, fetchAddresses));
             } else if (keywords.find((x) => x === child.exp)) {
-                omg.push(... await this.varListChildren(parent, child.name, fetchAddresses));
+                omg.push(...await this.varListChildren(parent, child.name, fetchAddresses));
             } else {
                 // Only fetch addresses if explicitly requested (for live watch)
                 if (fetchAddresses && parentPath) {
@@ -1189,20 +1189,21 @@ export class MI2 extends EventEmitter implements IBackend {
             }
         });
     }
+
     /**
      * Get struct type information by parsing ptype /o output
      * Results are cached for performance
      * @param typeName Name of the struct/union type
      * @returns StructMemberInfo with member information including bitfield offsets
      */
-    public async getStructTypeInfo(structNume:string,typeName: string): Promise<StructMemberInfo | null> {
+    public async getStructTypeInfo(structNume: string, typeName: string): Promise<StructMemberInfo | null> {
         this.log('log', `DebugLiveWatch: [getStructTypeInfo] Getting type info for ${typeName}\n`);
 
         // Check cache first
         if (this.structTypeInfoCache.has(`${structNume}.${typeName}`)) {
             // this.log('log', `DebugLiveWatch: [getStructTypeInfo] Cache hit for ${structNume}.${typeName}\n`);
             return this.structTypeInfoCache.get(`${structNume}.${typeName}`);
-}
+        }
 
         try {
             // Send ptype /o command to get struct layout with offsets
@@ -1211,7 +1212,7 @@ export class MI2 extends EventEmitter implements IBackend {
             const result = await this.sendCommand(cmd, false, true);
 
             // Parse the output
-            const typeInfo = this.parsePtypeOutput(result,structNume,typeName);
+            const typeInfo = this.parsePtypeOutput(result, structNume, typeName);
             if (typeInfo) {
                 this.structTypeInfoCache.set(`${structNume}.${typeName}`, typeInfo);
             }
@@ -1250,7 +1251,8 @@ export class MI2 extends EventEmitter implements IBackend {
                 const bitWidth = parseInt(m[5]);
                 const bitOffset = byteOffset * 8 + bitOffsetInByte;
 
-                // this.log('log', `DebugLiveWatch: [parsePtypeOutput] Found ${typeName}: bitOffset=${bitOffset}, bitWidth=${bitWidth}, containerSize=${containerSize}\n`);
+                // this.log('log',
+                //     `DebugLiveWatch: [parsePtypeOutput] Found ${typeName}: bitOffset=${bitOffset}, bitWidth=${bitWidth}, containerSize=${containerSize}\n`);
 
                 return {
                     name: typeName,
@@ -1263,7 +1265,6 @@ export class MI2 extends EventEmitter implements IBackend {
         // this.log('log', `DebugLiveWatch: [parsePtypeOutput] Member '${typeName}' not found\n`);
         return null;
     }
-
 }
 
 interface SendCommaindIF {

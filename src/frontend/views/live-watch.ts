@@ -49,7 +49,6 @@ export class LiveVariableNode extends BaseNode {
         return this.address;
     }
 
-
     public getChildren(): LiveVariableNode[] {
         if (!this.parent && (!this.children || !this.children.length)) {
             return [new LiveVariableNodeMsg(this)];

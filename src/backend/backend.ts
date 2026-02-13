@@ -158,7 +158,7 @@ export class VariableObject {
             variablesReference: this.id
         };
         this.tryAddMemoryReference(res);
-		
+
         this.curDisplayName = res.name;
         if (this.address) {
             res['memoryReference'] = hexFormat(parseInt(this.address));
