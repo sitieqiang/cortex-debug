@@ -155,6 +155,18 @@ export class VariablesHandler {
                                     }
                                 }
                                 varObj = this.variableHandles.get(varId) as any;
+                                if (varObj && exp) {
+                                    try {
+                                        const addrExpr = exp.replace(/\\"/g, '"');
+                                        const addrResp = await miDebugger.sendCommand(`data-evaluate-expression "&${addrExpr}"`);
+                                        const addrValue = addrResp.result('value');
+                                        if (addrValue && addrValue.startsWith('0x')) {
+                                            varObj.address = addrValue;
+                                        }
+                                    } catch (e) {
+                                        // Address might not be available for all variables
+                                    }
+                                }
                             } catch (err) {
                                 updateError = err;
                             }
@@ -261,39 +273,53 @@ export class VariablesHandler {
                 let children: VariableObject[];
                 const childMap: { [name: string]: number } = {};
                 try {
-                    let vars = [];
+                    let vars: DebugProtocol.Variable[] = [];
                     children = this.getCachedChilren(pVar);
-                    if (children) {
-                        for (const child of children) {
-                            vars.push(child.toProtocolVariable());
-                        }
-                    } else {
+                    if (!children) {
                         children = await miDebugger.varListChildren(args.variablesReference, id.name, true);
                         pVar.children = {};     // Clear in case type changed, dynamic variable, etc.
-                        vars = children.map((child) => {
+                    }
+
+                    // Refresh addresses for all children after getting them
+                    for (const child of children) {
+                        if (child.fullExp || child.exp) {
+                            try {
+                                const childExpr = child.fullExp || child.exp;
+                                const addrResp = await miDebugger.sendCommand(`data-evaluate-expression "&${childExpr}"`);
+                                const addrValue = addrResp.result('value');
+                                if (addrValue && addrValue.startsWith('0x')) {
+                                    child.address = addrValue;
+                                }
+                            } catch (e) {
+                                // Address might not be available
+                            }
+                        }
+                    }
+
+                    // Map children to protocol variables
+                    for (const child of children) {
+                        if (!child.id) {
                             const varId = this.findOrCreateVariable(child);
                             child.id = varId;
-                            if (/^\d+$/.test(child.exp)) {
-                                child.fullExp = `${pVar.fullExp || pVar.exp}[${child.exp}]`;
-                            } else {
-                                let suffix = '.' + child.exp;                   // A normal suffix
-                                if (child.exp.startsWith('<anonymous')) {       // We can have duplicates!!
-                                    const prev = childMap[child.exp];
-                                    if (prev) {
-                                        childMap[child.exp] = prev + 1;
-                                        child.exp += '#' + prev.toString(10);
-                                    }
-                                    childMap[child.exp] = 1;
-                                    suffix = '';    // Anonymous ones don't have a suffix. Have to use parent name
-                                } else {
-                                    // The full-name is not always derivable from the parent and child info. Esp. children
-                                    // of anonymous stuff. Might as well store all of them or set-value will not work.
-                                    pVar.children[child.exp] = child.name;
+                        }
+                        if (/^\d+$/.test(child.exp)) {
+                            child.fullExp = `${pVar.fullExp || pVar.exp}[${child.exp}]`;
+                        } else {
+                            let suffix = '.' + child.exp;
+                            if (child.exp.startsWith('<anonymous')) {
+                                const prev = childMap[child.exp];
+                                if (prev) {
+                                    childMap[child.exp] = prev + 1;
+                                    child.exp += '#' + prev.toString(10);
                                 }
-                                child.fullExp = `${pVar.fullExp || pVar.exp}${suffix}`;
+                                childMap[child.exp] = 1;
+                                suffix = '';
+                            } else {
+                                pVar.children[child.exp] = child.name;
                             }
-                            return child.toProtocolVariable();
-                        });
+                            child.fullExp = `${pVar.fullExp || pVar.exp}${suffix}`;
+                        }
+                        vars.push(child.toProtocolVariable());
                     }
 
                     response.body = {
