@@ -8,9 +8,9 @@ import { LiveWatchTreeProvider, LiveVariableNode } from './views/live-watch';
 import { RTTCore, SWOCore } from './swo/core';
 import {
     ConfigurationArguments, RTTCommonDecoderOpts, RTTConsoleDecoderOpts,
-    CortexDebugKeys, ChainedEvents, ADAPTER_DEBUG_MODE, ChainedConfig } from '../common';
+    CortexDebugKeys, ChainedEvents, ADAPTER_DEBUG_MODE, ChainedConfig
+} from '../common';
 import { MemoryContentProvider } from './memory_content_provider';
-import Reporting from '../reporting';
 
 import { CortexDebugConfigurationProvider, CortexDebugAdapterDescriptorFactory } from './configprovider';
 import { JLinkSocketRTTSource, SocketRTTSource, SocketSWOSource, PeMicroSocketSource } from './swo/sources/socket';
@@ -40,22 +40,20 @@ class ServerStartedPromise {
 export class CortexDebugExtension {
     private rttTerminals: RTTTerminal[] = [];
 
-    private gdbServerConsole: GDBServerConsole = null;
+    private gdbServerConsole: GDBServerConsole | null = null;
 
     private memoryProvider: MemoryContentProvider;
     private liveWatchProvider: LiveWatchTreeProvider;
     private liveWatchTreeView: vscode.TreeView<LiveVariableNode>;
 
     private SVDDirectory: SVDInfo[] = [];
-    private functionSymbols: SymbolInformation[] = null;
-    private serverStartedEvent: ServerStartedPromise;
+    private functionSymbols: SymbolInformation[] | null = null;
+    private serverStartedEvent: ServerStartedPromise | undefined;
 
     constructor(private context: vscode.ExtensionContext) {
         const config = vscode.workspace.getConfiguration('cortex-debug');
         this.startServerConsole(context, config.get(CortexDebugKeys.SERVER_LOG_FILE_NAME, '')); // Make this the first thing we do to be ready for the session
         this.memoryProvider = new MemoryContentProvider();
-
-        Reporting.activate(context);
 
         this.liveWatchProvider = new LiveWatchTreeProvider(this.context);
         this.liveWatchTreeView = vscode.window.createTreeView('cortex-debug.liveWatch', {
@@ -130,7 +128,7 @@ export class CortexDebugExtension {
         let session = CortexDebugExtension.getActiveCDSession();
         if (session) {
             let mySession = CDebugSession.FindSession(session);
-            const parentConfig = mySession.config?.pvtParent;
+            const parentConfig = mySession?.config?.pvtParent;
             while (mySession && parentConfig) {
                 // We have a parent. See if our life-cycle is managed by our parent, if so
                 // send a reset to the parent instead
@@ -157,7 +155,7 @@ export class CortexDebugExtension {
             this.gdbServerConsole.startServer().then(() => {
                 resolve(); // All worked out
             }).catch((e) => {
-                this.gdbServerConsole.dispose();
+                this.gdbServerConsole?.dispose();
                 this.gdbServerConsole = null;
                 vscode.window.showErrorMessage(`Could not create gdb-server-console. Will use old style console. Please report this problem. ${e.toString()}`);
             });
@@ -195,7 +193,9 @@ export class CortexDebugExtension {
         if (e.affectsConfiguration(`cortex-debug.${CortexDebugKeys.SERVER_LOG_FILE_NAME}`)) {
             const config = vscode.workspace.getConfiguration('cortex-debug');
             const fName = config.get(CortexDebugKeys.SERVER_LOG_FILE_NAME, '');
-            this.gdbServerConsole.createLogFile(fName);
+            if (this.gdbServerConsole) {
+                this.gdbServerConsole.createLogFile(fName);
+            }
         }
         if (e.affectsConfiguration(`cortex-debug.${CortexDebugKeys.DEV_DEBUG_MODE}`)) {
             const config = vscode.workspace.getConfiguration('cortex-debug');
@@ -210,7 +210,7 @@ export class CortexDebugExtension {
         }
     }
 
-    private getSVDFile(device: string): string {
+    private getSVDFile(device: string): string | null {
         const entry = this.SVDDirectory.find((de) => de.expression.test(device));
         return entry ? entry.path : null;
     }
@@ -223,12 +223,11 @@ export class CortexDebugExtension {
         this.SVDDirectory.push({ expression: expression, path: path });
     }
 
-    private activeEditorChanged(editor: vscode.TextEditor) {
-        const session = CortexDebugExtension.getActiveCDSession();
-        if (editor !== undefined && session) {
-            const uri = editor.document.uri;
-            if (uri.scheme === 'file') {
-                // vscode.debug.activeDebugSession.customRequest('set-active-editor', { path: uri.path });
+    private activeEditorChanged(editor: vscode.TextEditor | undefined) {
+        if (editor && editor.document.uri.scheme === 'file') {
+            const session = CortexDebugExtension.getActiveCDSession();
+            if (session) {
+                // session.customRequest('set-active-editor', { path: editor.document.uri.fsPath });
             }
         }
     }
@@ -239,7 +238,7 @@ export class CortexDebugExtension {
             const installExt = 'Install MemoryView Extension';
             vscode.window.showErrorMessage(
                 `Unable to execute ${cmd}. Perhaps the MemoryView extension is not installed. `
-                + 'Please install extension and try again. A restart may be needed', undefined,
+                + 'Please install extension and try again. A restart may be needed', {},
                 {
                     title: installExt
                 },
@@ -284,10 +283,10 @@ export class CortexDebugExtension {
             prompt: 'Memory Address'
         }).then(
             (address) => {
+                if (!address) { return; }
                 address = address.trim();
                 if (!validateAddress(address)) {
                     vscode.window.showErrorMessage('Invalid memory address entered');
-                    Reporting.sendEvent('Examine Memory', 'Invalid Address', address);
                     return;
                 }
 
@@ -297,14 +296,13 @@ export class CortexDebugExtension {
                     prompt: 'Length'
                 }).then(
                     (length) => {
+                        if (!length) { return; }
                         length = length.trim();
                         if (!validateValue(length)) {
                             vscode.window.showErrorMessage('Invalid length entered');
-                            Reporting.sendEvent('Examine Memory', 'Invalid Length', length);
                             return;
                         }
 
-                        Reporting.sendEvent('Examine Memory', 'Valid', `${address}-${length}`);
                         const timestamp = new Date().getTime();
                         const addrEnc = encodeURIComponent(`${address}`);
                         const uri = vscode.Uri.parse(
@@ -316,10 +314,8 @@ export class CortexDebugExtension {
                             .then((doc) => {
                                 this.memoryProvider.Register(doc);
                                 vscode.window.showTextDocument(doc, { viewColumn: 2, preview: false });
-                                Reporting.sendEvent('Examine Memory', 'Used');
                             }, (error) => {
                                 vscode.window.showErrorMessage(`Failed to examine memory: ${error}`);
-                                Reporting.sendEvent('Examine Memory', 'Error', error.toString());
                             });
                     },
                     (error) => {
@@ -346,7 +342,7 @@ export class CortexDebugExtension {
             for (const mapping of configurationTargetMapping) {
                 const [inspectKeyPrefix, mappingTarget] = mapping;
                 const inspectKey = inspectKeyPrefix + inspectKeySuffix;
-                if (info[inspectKey] !== undefined)
+                if (info && (info as any)[inspectKey] !== undefined)
                     return [mappingTarget, inspectKeySuffix == 'LanguageValue'];
             }
         }
@@ -410,8 +406,6 @@ export class CortexDebugExtension {
                 svdfile = this.getSVDFile(args.device);
             }
 
-            Reporting.beginSession(session.id, args as ConfigurationArguments);
-
             if (newSession.swoSource) {
                 this.initializeSWO(session, args);
             }
@@ -429,8 +423,6 @@ export class CortexDebugExtension {
         if (session.type !== 'cortex-debug') { return; }
         const mySession = CDebugSession.FindSession(session);
         try {
-            Reporting.endSession(session.id);
-
             this.liveWatchProvider?.debugSessionTerminated(session);
             if (mySession?.swo) {
                 mySession.swo.debugSessionTerminated();
@@ -443,12 +435,12 @@ export class CortexDebugExtension {
             }
             if (mySession?.rttPortMap) {
                 for (const ch of Object.keys(mySession.rttPortMap)) {
-                    mySession.rttPortMap[ch].dispose();
+                    mySession.rttPortMap[parseInt(ch)].dispose();
                 }
                 mySession.rttPortMap = {};
             }
         } catch (e) {
-            vscode.window.showInformationMessage(`Debug session did not terminate cleanly ${e}\n${e ? e.stackstrace : ''}. Please report this problem`);
+            vscode.window.showInformationMessage(`Debug session did not terminate cleanly ${e}\n${e ? (e as Error).stack : ''}. Please report this problem`);
         } finally {
             CDebugSession.RemoveSession(session);
         }
@@ -572,14 +564,14 @@ export class CortexDebugExtension {
             if (launch && launch.detached && (count > 0)) {
                 try {
                     // tslint:disable-next-line: one-variable-per-declaration
-                    let res: (value: vscode.DebugSessionCustomEvent) => void;
-                    let rej: (reason?: any) => void;
+                    let res!: (value: vscode.DebugSessionCustomEvent) => void;
+                    let rej!: (reason?: any) => void;
                     const prevStartedPromise = new Promise<vscode.DebugSessionCustomEvent>((resolve, reject) => {
                         res = resolve;
                         rej = reject;
                     });
                     this.serverStartedEvent = new ServerStartedPromise(launch.name, prevStartedPromise, res, rej);
-                    let to = setTimeout(() => {
+                    let to: any = setTimeout(() => {
                         if (this.serverStartedEvent) {
                             this.serverStartedEvent.reject(new Error(`Timeout starting chained session: ${launch.name}`));
                             this.serverStartedEvent = undefined;
@@ -601,7 +593,7 @@ export class CortexDebugExtension {
 
     private endChainedConfigs(e: vscode.DebugSessionCustomEvent) {
         const mySession = CDebugSession.FindSession(e.session);
-        if (mySession && mySession.hasChildren) {
+        if (mySession && mySession.hasChildren()) {
             // Note that we may not be the root, but we have children. Also we do not modify the tree while iterating it
             const deathList: CDebugSession[] = [];
             const orphanList: CDebugSession[] = [];
@@ -617,11 +609,12 @@ export class CortexDebugExtension {
             // According to current scheme, there should not be any orphaned children.
             while (orphanList.length > 0) {
                 const s = orphanList.pop();
-                s.moveToRoot();     // Or should we move to our parent. TODO: fix for when we are going to have grand children
+                s?.moveToRoot();     // Or should we move to our parent. TODO: fix for when we are going to have grand children
             }
 
             while (deathList.length > 0) {
                 const s = deathList.pop();
+                if (!s) { continue; }
                 // We cannot actually use the following API. We have to do this ourselves. Probably because we own
                 // the lifetime management.
                 // vscode.debug.stopDebugging(s.session);
@@ -639,7 +632,7 @@ export class CortexDebugExtension {
 
     private resetOrResartChained(e: vscode.DebugSessionCustomEvent, type: 'reset' | 'restart') {
         const mySession = CDebugSession.FindSession(e.session);
-        if (mySession && mySession.hasChildren) {
+        if (mySession && mySession.hasChildren()) {
             mySession.broadcastDFS((s) => {
                 if (s === mySession) { return; }
                 if (s.config.pvtMyConfigFromParent.lifecycleManagedByParent) {
@@ -651,7 +644,7 @@ export class CortexDebugExtension {
         }
     }
 
-    private getWsFolder(folder: string, def: vscode.WorkspaceFolder, childName): vscode.WorkspaceFolder {
+    private getWsFolder(folder: string, def: vscode.WorkspaceFolder | undefined, childName: string): vscode.WorkspaceFolder | undefined {
         if (folder) {
             const orig = folder;
             const normalize = (fsPath: string) => {
@@ -664,62 +657,68 @@ export class CortexDebugExtension {
             };
             // Folder is always a full path name
             folder = normalize(folder);
-            for (const f of vscode.workspace.workspaceFolders) {
-                const tmp = normalize(f.uri.fsPath);
-                if ((f.uri.fsPath === folder) || (f.name === folder) || (tmp === folder)) {
-                    return f;
+            if (vscode.workspace.workspaceFolders) {
+                for (const f of vscode.workspace.workspaceFolders) {
+                    const tmp = normalize(f.uri.fsPath);
+                    if ((f.uri.fsPath === folder) || (f.name === folder) || (tmp === folder)) {
+                        return f;
+                    }
                 }
             }
             vscode.window.showInformationMessage(
                 `Chained configuration for '${childName}' specified folder is '${orig}' normalized path is '${folder}'`
-                + ' did not match any workspace folders. Using parents folder.');
+                + ` but that folder is not open in the workspace. Using '${def ? def.name : 'root'}'`);
+        } else {
+            // No folder specified. Use the default one (parent's folder)
+            return def;
         }
         return def;
     }
 
-    private getCurrentArgs(session: vscode.DebugSession): ConfigurationArguments {
-        if (!session) {
-            session = vscode.debug.activeDebugSession;
-            if (!session || (session.type !== 'cortex-debug')) {
-                return undefined;
-            }
+    private getCurrentArgs(session: vscode.DebugSession): ConfigurationArguments | undefined {
+        const sess = session || vscode.debug.activeDebugSession;
+        if (!sess || (sess.type !== 'cortex-debug')) {
+            return undefined;
         }
-        const ourSession = CDebugSession.FindSession(session);
+        const ourSession = CDebugSession.FindSession(sess);
         if (ourSession) {
             return ourSession.config as ConfigurationArguments;
         }
-        return session.configuration as unknown as ConfigurationArguments;
+        return sess.configuration as unknown as ConfigurationArguments;
     }
 
     // Assuming 'session' valid and it a cortex-debug session
     private isDebugging(session: vscode.DebugSession) {
-        const { noDebug } = this.getCurrentArgs(session);
-        return (noDebug !== true);       // If it is exactly equal to 'true' we are doing a 'run without debugging'
+        const args = this.getCurrentArgs(session);
+        return args && (args.noDebug !== true);       // If it is exactly equal to 'true' we are doing a 'run without debugging'
     }
 
     private receivedStopEvent(e: vscode.DebugSessionCustomEvent) {
         const mySession = CDebugSession.FindSession(e.session);
-        mySession.status = 'stopped';
-        this.liveWatchProvider?.debugStopped(e.session);
-        vscode.workspace.textDocuments.filter((td) => td.fileName.endsWith('.cdmem')).forEach((doc) => {
-            if (!doc.isClosed) {
-                this.memoryProvider.update(doc);
-            }
-        });
-        if (mySession.swo) { mySession.swo.debugStopped(); }
-        if (mySession.rtt) { mySession.rtt.debugStopped(); }
+        if (mySession) {
+            mySession.status = 'stopped';
+            this.liveWatchProvider?.debugStopped(e.session);
+            vscode.workspace.textDocuments.filter((td) => td.fileName.endsWith('.cdmem')).forEach((doc) => {
+                if (!doc.isClosed) {
+                    this.memoryProvider.update(doc);
+                }
+            });
+            if (mySession.swo) { mySession.swo.debugStopped(); }
+            if (mySession.rtt) { mySession.rtt.debugStopped(); }
+        }
     }
 
     private receivedContinuedEvent(e: vscode.DebugSessionCustomEvent) {
         const mySession = CDebugSession.FindSession(e.session);
-        mySession.status = 'running';
-        this.liveWatchProvider?.debugContinued(e.session);
-        if (mySession.swo) { mySession.swo.debugContinued(); }
-        if (mySession.rtt) { mySession.rtt.debugContinued(); }
+        if (mySession) {
+            mySession.status = 'running';
+            this.liveWatchProvider?.debugContinued(e.session);
+            if (mySession.swo) { mySession.swo.debugContinued(); }
+            if (mySession.rtt) { mySession.rtt.debugContinued(); }
+        }
     }
 
-    private receivedEvent(e) {
-        Reporting.sendEvent(e.body.category, e.body.action, e.body.label, e.body.parameters);
+    private receivedEvent(e: any) {
     }
 
     private receivedSWOConfigureEvent(e: vscode.DebugSessionCustomEvent) {
@@ -739,20 +738,15 @@ export class CortexDebugExtension {
             }, (e) => {
                 vscode.window.showErrorMessage(`Could not open SWO TCP port ${e.body.port} ${e} after ${src.nTries} tries`);
             });
-            Reporting.sendEvent('SWO', 'Source', 'Socket');
             return;
         } else if (e.body.type === 'fifo') {
             mySession.swoSource = new FifoSWOSource(e.body.path);
-            Reporting.sendEvent('SWO', 'Source', 'FIFO');
         } else if (e.body.type === 'file') {
             mySession.swoSource = new FileSWOSource(e.body.path);
-            Reporting.sendEvent('SWO', 'Source', 'File');
         } else if (e.body.type === 'serial') {
             mySession.swoSource = new SerialSWOSource(e.body.device, e.body.baudRate);
-            Reporting.sendEvent('SWO', 'Source', 'Serial');
         } else if (e.body.type === 'usb') {
             mySession.swoSource = new UsbSWOSource(e.body.device, e.body.port);
-            Reporting.sendEvent('SWO', 'Source', 'USB');
         }
 
         this.initializeSWO(e.session, e.body.args);
@@ -762,10 +756,8 @@ export class CortexDebugExtension {
         if (e.body.type === 'socket') {
             const decoder: RTTCommonDecoderOpts = e.body.decoder;
             if ((decoder.type === 'console') || (decoder.type === 'binary')) {
-                Reporting.sendEvent('RTT', 'Source', 'Socket: Console');
                 this.rttCreateTerninal(e, decoder as RTTConsoleDecoderOpts);
             } else {
-                Reporting.sendEvent('RTT', 'Source', `Socket: ${decoder.type}`);
                 if (!decoder.ports) {
                     this.createRTTSource(e, decoder.tcpPort, decoder.port);
                 } else {
@@ -843,8 +835,9 @@ export class CortexDebugExtension {
         this.rttTerminals = this.rttTerminals.filter((t) => t.terminal !== terminal);
     }
 
-    private initializeSWO(session: vscode.DebugSession, args) {
+    private initializeSWO(session: vscode.DebugSession, args: any) {
         const mySession = CDebugSession.FindSession(session);
+        if (!mySession) { return; }
         if (!mySession.swoSource) {
             vscode.window.showErrorMessage('Tried to initialize SWO Decoding without a SWO data source');
             return;
@@ -855,8 +848,9 @@ export class CortexDebugExtension {
         }
     }
 
-    private initializeRTT(session: vscode.DebugSession, args) {
+    private initializeRTT(session: vscode.DebugSession, args: any) {
         const mySession = CDebugSession.FindSession(session);
+        if (!mySession) { return; }
         if (!mySession.rtt) {
             mySession.rtt = new RTTCore(mySession.rttPortMap, args, this.context.extensionPath);
         }
@@ -868,7 +862,7 @@ export class CortexDebugExtension {
             ignoreFocusOut: true,
             prompt: 'Enter Live Watch Expression'
         }).then((v) => {
-            if (v) {
+            if (v && vscode.debug.activeDebugSession) {
                 this.liveWatchProvider.addWatchExpr(v, vscode.debug.activeDebugSession);
             }
         });
@@ -890,7 +884,7 @@ export class CortexDebugExtension {
             mySession.session.customRequest('is-global-or-static', { varRef: varRef }).then((result) => {
                 if (!result.success) {
                     vscode.window.showErrorMessage(`Cannot add ${expr} to Live Watch. Must be a global or static variable`);
-                } else {
+                } else if (vscode.debug.activeDebugSession) {
                     this.liveWatchProvider.addWatchExpr(expr, vscode.debug.activeDebugSession);
                 }
             }, (e) => {
@@ -929,4 +923,4 @@ export function activate(context: vscode.ExtensionContext) {
     return new CortexDebugExtension(context);
 }
 
-export function deactivate() {}
+export function deactivate() { }
