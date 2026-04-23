@@ -108,17 +108,17 @@ export class HWBreakpointMgr {
 }
 
 enum HandleRegions {
-    /* eslint-disable @stylistic/no-multi-spaces */
-    GLOBAL_HANDLE_ID      = 0xFFFFFFFF,
-    STACK_HANDLES_START   = encodeReference(0x01, 0x000),
-    STACK_HANDLES_FINISH  = encodeReference(0xFF, 0xFFF),
-    STATIC_HANDLES_START  = STACK_HANDLES_FINISH + 1,
+
+    GLOBAL_HANDLE_ID = 0xFFFFFFFF,
+    STACK_HANDLES_START = encodeReference(0x01, 0x000),
+    STACK_HANDLES_FINISH = encodeReference(0xFF, 0xFFF),
+    STATIC_HANDLES_START = STACK_HANDLES_FINISH + 1,
     STATIC_HANDLES_FINISH = STATIC_HANDLES_START + RegionSize,
-    REG_HANDLE_START      = STATIC_HANDLES_FINISH + 1,
-    REG_HANDLE_FINISH     = REG_HANDLE_START + RegionSize,
-    VAR_HANDLES_START     = REG_HANDLE_FINISH + 1,
+    REG_HANDLE_START = STATIC_HANDLES_FINISH + 1,
+    REG_HANDLE_FINISH = REG_HANDLE_START + RegionSize,
+    VAR_HANDLES_START = REG_HANDLE_FINISH + 1,
     rest = 0xFFFFFFFF - VAR_HANDLES_START
-    /* eslint-enable */
+
 }
 
 const SERVER_TYPE_MAP = {
@@ -142,7 +142,7 @@ enum SessionMode {
 
 const VarNotFoundMsg = 'Variable object not found';
 export class ExtendedVariable {
-    constructor(public name, public options) {
+    constructor(public name: any, public options: any) {
     }
 }
 
@@ -159,12 +159,12 @@ function COMMAND_MAP(c: string): string {
 
 let dbgResumeStopCounter = 0;
 class CustomStoppedEvent extends Event implements DebugProtocol.Event {
-    public readonly body: {
+    public readonly body!: {
         reason: string;
         threadID: number;
     };
 
-    public readonly event: string;
+    public readonly event!: string;
 
     constructor(reason: string, threadID: number) {
         super('custom-stop', { reason: reason, threadID: threadID });
@@ -174,7 +174,7 @@ class CustomStoppedEvent extends Event implements DebugProtocol.Event {
 }
 
 class PendingContinue {
-    constructor(public shouldContinue: boolean, public haveMore?: () => boolean) {}
+    constructor(public shouldContinue: boolean, public haveMore?: () => boolean) { }
 }
 
 class VSCodeRequest<RespType, ArgsType> {
@@ -187,7 +187,7 @@ class VSCodeRequest<RespType, ArgsType> {
         public resolve: any,
         public reject: any,
         public extra: any[]
-    ) {}
+    ) { }
 }
 
 /*
@@ -205,11 +205,11 @@ export class RequestQueue<RespType, ArgsType> {
     private queue: VSCodeRequest<RespType, ArgsType>[] = [];
     private queueBusy = false;
     public pendedContinue = new PendingContinue(false, this.haveMore.bind(this));
-    constructor(private alwaysResolve = true) {}
+    constructor(private alwaysResolve = true) { }
     public add(
         // For the varargs, extra can be any set of args but the first arg if used, is of type PendContinue
         functor: (response: RespType, args: ArgsType, ...extra: any[]) => Promise<void>,
-        response: RespType, args: ArgsType, ...extra): Promise<void> {
+        response: RespType, args: ArgsType, ...extra: any[]): Promise<void> {
         return new Promise<void>(async (resolve, reject) => {
             this.queue.push(new VSCodeRequest<RespType, ArgsType>(functor, response, args, resolve, reject, extra));
             while (!this.queueBusy && (this.queue.length > 0)) {
@@ -237,13 +237,6 @@ export class RequestQueue<RespType, ArgsType> {
 }
 
 class CustomContinuedEvent extends Event implements DebugProtocol.Event {
-    public readonly body: {
-        threadID: number;
-        allThreads: boolean;
-    };
-
-    public readonly event: string;
-
     constructor(threadID: number, allThreads: boolean = true) {
         super('custom-continued', { threadID: threadID, allThreads: allThreads });
         // console.log(`${dbgResumeStopCounter} **** Running thread:${threadID}`);
@@ -253,31 +246,32 @@ class CustomContinuedEvent extends Event implements DebugProtocol.Event {
 
 const traceThreads = false;
 export class GDBDebugSession extends LoggingDebugSession {
-    private server: GDBServer;
-    public args: ConfigurationArguments;
-    private ports: { [name: string]: number };
-    private serverController: GDBServerController;
-    public symbolTable: SymbolTable;
+    private server!: GDBServer;
+    public args!: ConfigurationArguments;
+    private ports!: { [name: string]: number };
+    private serverController!: GDBServerController;
+    public symbolTable!: SymbolTable;
     private usingParentServer = false;
     private debugLogFd = -1;
 
     protected variableHandles = new Handles<string | VariableObject | ExtendedVariable>(HandleRegions.VAR_HANDLES_START);
     protected variableHandlesReverse = new Map<string, number>();
-    protected quit: boolean;
-    protected attached: boolean;
-    protected started: boolean;
-    protected debugReady: boolean;
-    public miDebugger: MI2;
+    protected quit!: boolean;
+    protected attached!: boolean;
+    protected started!: boolean;
+    protected debugReady!: boolean;
+    public miDebugger!: MI2;
     public miLiveGdb: LiveWatchMonitor | undefined;
-    protected activeEditorPath: string = null;
-    protected disassember: GdbDisassembler;
+    protected activeEditorPath: string | null = null;
+    protected disassember!: GdbDisassembler;
     // currentThreadId is the currently selected thread or where execution has stopped. It not very
     // meaningful since the current thread id in gdb can change in many ways (when you use a --thread
     // option on certain commands)
     protected currentThreadId: number = 0;
     protected activeThreadIds = new Set<number>();      // Used for consistency check
-    protected hwBreakpointMgr: HWBreakpointMgr;
-    protected hwWatchpointMgr: HWBreakpointMgr;
+    protected hwBreakpointMgr!: HWBreakpointMgr;
+    protected hwWatchpointMgr!: HWBreakpointMgr;
+    protected configDone!: boolean;
 
     /**
      * If we are requested a major switch like restart/disconnect/detach we may have to interrupt the
@@ -307,7 +301,6 @@ export class GDBDebugSession extends LoggingDebugSession {
     protected fileExistsCache: Map<string, boolean> = new Map<string, boolean>();
 
     protected onInternalEvents: EventEmitter = new EventEmitter();
-    protected configDone: boolean;
 
     protected suppressRadixMsgs = false;
 
@@ -327,7 +320,7 @@ export class GDBDebugSession extends LoggingDebugSession {
         TcpPortScanner.PortAllocated.on('allocated', this.tcpPortAllocatedListner);
     }
 
-    private tcpPortsAllocated(ports) {
+    private tcpPortsAllocated(ports: any) {
         this.sendEvent(new GenericCustomEvent('ports-allocated', ports));
     }
 
@@ -362,6 +355,7 @@ export class GDBDebugSession extends LoggingDebugSession {
     }
 
     protected initializeRequest(response: DebugProtocol.InitializeResponse, args: DebugProtocol.InitializeRequestArguments): void {
+        response.body = response.body || {};
         response.body.supportsHitConditionalBreakpoints = true;
         response.body.supportsConfigurationDoneRequest = true;
         response.body.supportsConditionalBreakpoints = true;
@@ -493,7 +487,7 @@ export class GDBDebugSession extends LoggingDebugSession {
         }
     }
 
-    private dbgSymbolTable: SymbolTable = null;
+    private dbgSymbolTable: SymbolTable | null = null;
     private loadSymbols(): Promise<void> {
         return new Promise<void>((resolve) => {
             // this.dbgSymbolStuff(args, '/Users/hdm/Downloads/XXX-01.elf', 'main', null);
@@ -608,7 +602,7 @@ export class GDBDebugSession extends LoggingDebugSession {
         return args;
     }
 
-    private getTCPPorts(useParent): Thenable<void> {
+    private getTCPPorts(useParent: boolean): Thenable<void> {
         return new Promise((resolve, reject) => {
             const startPort = 50000;
             if (useParent) {
@@ -622,9 +616,13 @@ export class GDBDebugSession extends LoggingDebugSession {
             const totalPortsNeeded = this.calculatePortsNeeded();
             const portFinderOpts = { min: startPort, max: 52000, retrieve: totalPortsNeeded, consecutive: true };
             TcpPortScanner.findFreePorts(portFinderOpts, GDBServer.LOCALHOST).then((ports) => {
-                this.createPortsMap(ports);
-                this.serverController.setPorts(this.ports);
-                resolve();
+                if (ports) {
+                    this.createPortsMap(ports);
+                    this.serverController.setPorts(this.ports);
+                    resolve();
+                } else {
+                    reject(new Error('Could not find free ports'));
+                }
             }, (e) => {
                 reject(e);
             });
@@ -636,7 +634,7 @@ export class GDBDebugSession extends LoggingDebugSession {
             const doResolve = () => {
                 if (resolve) {
                     resolve();
-                    resolve = null;
+                    resolve = undefined as any;
                 }
             };
             const haveSymFiles = this.args.symbolFiles && (this.args.symbolFiles.length > 0);
@@ -645,7 +643,7 @@ export class GDBDebugSession extends LoggingDebugSession {
                 return doResolve();
             }
 
-            const ControllerClass = SERVER_TYPE_MAP[this.args.servertype];
+            const ControllerClass = (SERVER_TYPE_MAP as any)[this.args.servertype];
             this.serverController = new ControllerClass();
             this.serverController.setArguments(this.args);
             this.serverController.on('event', this.serverControllerEvent.bind(this));
@@ -666,7 +664,7 @@ export class GDBDebugSession extends LoggingDebugSession {
                 return doResolve();
             }
             const symbolsPromise = this.loadSymbols();      // This is totally async and in most cases, done while gdb is starting
-            let gdbPromiseAsyncErr;
+            let gdbPromiseAsyncErr: any;
             const gdbPromise = this.startGdb(response);
             gdbPromise.catch((err) => {
                 gdbPromiseAsyncErr = err;
@@ -728,7 +726,7 @@ export class GDBDebugSession extends LoggingDebugSession {
                     doResolve();
                 });
 
-                let timeout = setTimeout(() => {
+                let timeout: any = setTimeout(() => {
                     this.server.exit();
                     this.sendEvent(new TelemetryEvent(
                         'Error',
@@ -740,7 +738,7 @@ export class GDBDebugSession extends LoggingDebugSession {
                 }, GDBServer.SERVER_TIMEOUT);
 
                 let elapsed = 0;
-                let feedbackTimer = setInterval(() => {
+                let feedbackTimer: any = setInterval(() => {
                     const svrName = this.serverController.name || this.args.servertype;
                     elapsed += 5;
                     this.handleMsg('stdout', `Still waiting for ${svrName} GDB Server to be ready, ${elapsed} seconds...looking for '${initMatch}'\n`);
@@ -799,7 +797,8 @@ export class GDBDebugSession extends LoggingDebugSession {
                         if (err instanceof MIError) {
                             msg = `Failed to initialize GDB: ${err.message}\n\nFailed on command:\n${err.source}`;
                         } else {
-                            msg = 'Failed to generate gdb commands: ' + err.toString() + '\n' + err.stack.toString();
+                            const e = err as Error;
+                            msg = 'Failed to generate gdb commands: ' + e.toString() + '\n' + (e.stack || '').toString();
                         }
                         this.sendEvent(new TelemetryEvent('Error', 'Launching GDB', msg));
                         this.launchErrorResponse(response, 104, msg);
@@ -901,12 +900,12 @@ export class GDBDebugSession extends LoggingDebugSession {
     // the server scripts (OpenOCD, JLink, etc.) live and changing cwd for all servers will break for other servers
     // that are not so quirky.
     //
-    private getServerCwd(serverExe: string) {
+    private getServerCwd(serverExe: string | null) {
         let serverCwd = this.args.cwd || process.cwd();
         if (this.args.serverCwd) {
             serverCwd = this.args.serverCwd;
         } else if (this.args.servertype === 'stlink') {
-            serverCwd = path.dirname(serverExe) || '.';
+            serverCwd = serverExe ? path.dirname(serverExe) : '.';
             if (serverCwd !== '.') {
                 this.handleMsg('log', `Setting GDB-Server CWD: ${serverCwd}\n`);
             }
@@ -980,7 +979,7 @@ export class GDBDebugSession extends LoggingDebugSession {
                     // If failed to set the temporary breakpoint (e.g. function does not exist)
                     // complete the launch as if the breakpoint had not being defined
                     const msg = `Unable to set temporary breakpoint "runToEntryPoint":"${this.args.runToEntryPoint}". `
-                            + 'Function may not exist or out of breakpoints?';
+                        + 'Function may not exist or out of breakpoints?';
                     this.handleMsg('log', msg + '\n');
                     this.sendEvent(new GenericCustomEvent('popup', { type: 'warning', message: msg }));
 
@@ -1009,7 +1008,7 @@ export class GDBDebugSession extends LoggingDebugSession {
         });
     }
 
-    private getGdbPath(response: DebugProtocol.LaunchResponse): string {
+    private getGdbPath(response: DebugProtocol.LaunchResponse): string | null {
         let gdbExePath = os.platform() !== 'win32' ? `${this.args.toolchainPrefix}-gdb` : `${this.args.toolchainPrefix}-gdb.exe`;
         if (this.args.toolchainPath) {
             gdbExePath = path.normalize(path.join(this.args.toolchainPath, gdbExePath));
@@ -1255,8 +1254,8 @@ export class GDBDebugSession extends LoggingDebugSession {
                     const r: DebugProtocol.EvaluateResponse = {
                         ...response,
                         body: {
-                            result: undefined,
-                            variablesReference: undefined
+                            result: '',
+                            variablesReference: 0
                         }
                     };
                     await this.miLiveGdb.evaluateRequest(r, args);
@@ -1444,7 +1443,10 @@ export class GDBDebugSession extends LoggingDebugSession {
             }
             const buf = Buffer.from(intAry);
             const b64Data = buf.toString('base64');
-            response.body.data = b64Data;
+            response.body = {
+                address: args.memoryReference,
+                data: b64Data
+            };
             this.sendResponse(response);
         }, (error) => {
             this.sendErrorResponse(response, 114, `Read memory error: ${error.toString()}`);
@@ -1525,9 +1527,9 @@ export class GDBDebugSession extends LoggingDebugSession {
             this.miDebugger.sendCommand(`data-list-register-values ${fmt}`).then((node) => {
                 if (node.resultRecords.resultClass === 'done') {
                     const rv = node.resultRecords.results[0][1];
-                    response.body = rv.map((n) => {
-                        const val = {};
-                        n.forEach((x) => {
+                    response.body = rv.map((n: any[]) => {
+                        const val: { [key: string]: any } = {};
+                        n.forEach((x: any[]) => {
                             val[x[0]] = x[1];
                         });
                         return val;
@@ -1579,7 +1581,7 @@ export class GDBDebugSession extends LoggingDebugSession {
             this.sendResponse(response);
         }, (error) => {
             response.body = { error: error };
-            this.sendErrorResponse(response, 116, `Unable to read register list: ${error.toString()}`);
+            this.sendErrorResponse(response, 116, `Unable to read register list: ${(error).toString()}`);
             this.sendEvent(new TelemetryEvent('Error', 'Reading Register List', ''));
         });
     }
@@ -1587,11 +1589,11 @@ export class GDBDebugSession extends LoggingDebugSession {
     private waitForServerExitAndRespond(response: DebugProtocol.DisconnectResponse) {
         if (!this.server.isExternal() && this.server.isProcessRunning()) {
             let nTimes = 60;
-            let to = setInterval(() => {
+            let to: NodeJS.Timeout | null = setInterval(() => {
                 if ((nTimes === 0) || this.quit) {
                     // We waited long enough so try to nuke the server and send VSCode a response
                     // This is a really bad situation to be in, but not sure what else to do.
-                    clearInterval(to);
+                    if (to) clearInterval(to);
                     to = null;
                     this.server.exit();
                     this.serverConsoleLog('disconnectRequest sendResponse 3');
@@ -1620,7 +1622,7 @@ export class GDBDebugSession extends LoggingDebugSession {
         }
     }
 
-    protected disconnectingPromise: Promise<void> = undefined;
+    protected disconnectingPromise: Promise<void> | undefined;
     protected async disconnectRequest(response: DebugProtocol.DisconnectResponse, args: DebugProtocol.DisconnectArguments): Promise<void> {
         TcpPortScanner.PortAllocated.removeListener('allocated', this.tcpPortAllocatedListner);
         if (this.disconnectingPromise) {
@@ -1686,7 +1688,7 @@ export class GDBDebugSession extends LoggingDebugSession {
                             this.handleMsg('log', 'GDB commands overridePreEndSessionCommands failed ' + (e ? e.toString() : 'Unknown error') + '\n');
                         }
                     }
-                    await new Promise(() => setTimeout(() => {}, 5));
+                    await new Promise(() => setTimeout(() => { }, 5));
                 }
                 this.waitForServerExitAndRespond(response);     // Will wait asynchronously until the following actions are done
                 if (args.terminateDebuggee || args.suspendDebuggee) {
@@ -1707,7 +1709,7 @@ export class GDBDebugSession extends LoggingDebugSession {
                     // Many ways things can fail. See issue #561
                     // exec-interrupt can fail because gdb is wedged and does not respond with proper status ever
                     // use a timeout and try to end session anyways.
-                    let to = setTimeout(() => {
+                    let to: NodeJS.Timeout | null = setTimeout(() => {
                         if (to) {
                             to = null;
                             this.handleMsg('log', 'GDB never responded to an interrupt request. Trying to end session anyways\n');
@@ -2217,7 +2219,7 @@ export class GDBDebugSession extends LoggingDebugSession {
                     try {
                         const ret = await item.func() as T;
                         if (ret && !(ret instanceof MIError)) {
-                            const brk = ret as { number: number };
+                            const brk = ret as unknown as { number: number };
                             mgr.addBreakpoint(brk?.number || -1);
                         }
                         item.resolve(ret);
@@ -2242,7 +2244,7 @@ export class GDBDebugSession extends LoggingDebugSession {
         DebugProtocol.SetInstructionBreakpointsArguments |
         DebugProtocol.SetDataBreakpointsArguments>();
 
-    protected runToEntryPointPromise: Promise<OurSourceBreakpoint | MIError> = null;
+    protected runToEntryPointPromise: Promise<OurSourceBreakpoint | MIError> | null = null;
     protected setRunToEntryPoint(): Promise<OurSourceBreakpoint | MIError> {
         if (!this.runToEntryPointPromise) {
             const brk: OurSourceBreakpoint = {
@@ -2282,7 +2284,7 @@ export class GDBDebugSession extends LoggingDebugSession {
                                 isFunction: true,
                                 hwOpt: hwOpt,
                                 file: undefined,
-                                line: undefined
+                                line: 0
                             };
                             all.push(this.addBptSync<OurSourceBreakpoint | MIError>(() => {
                                 return this.miDebugger.addBreakPoint(arg);
@@ -2303,7 +2305,9 @@ export class GDBDebugSession extends LoggingDebugSession {
                                     };
                                 }
 
-                                this.functionBreakpoints.push(brkp.number);
+                                if (brkp.number !== undefined) {
+                                    this.functionBreakpoints.push(brkp.number);
+                                }
 
                                 return {
                                     source: {
@@ -2323,7 +2327,7 @@ export class GDBDebugSession extends LoggingDebugSession {
                         };
                         this.sendResponse(response);
                     } catch (msg) {
-                        this.sendErrorResponse(response, 10, msg.toString());
+                        this.sendErrorResponse(response, 10, (msg).toString());
                     }
 
                     this.continueIfNoMore(pendContinue);
@@ -2334,7 +2338,7 @@ export class GDBDebugSession extends LoggingDebugSession {
             });
         };
 
-        return this.allBreakPointsQ.add(doit, r, a);
+        return this.allBreakPointsQ.add(doit as any, r, a);
     }
 
     private reportHwBreakptLimit(brk: any): MIError {
@@ -2347,8 +2351,8 @@ export class GDBDebugSession extends LoggingDebugSession {
         );
     }
 
-    private continueIfNoMore(pendContinue: PendingContinue) {
-        if (!pendContinue.haveMore() && pendContinue.shouldContinue) {
+    private continueIfNoMore(pendContinue: PendingContinue | undefined) {
+        if (pendContinue && !pendContinue.haveMore?.() && pendContinue.shouldContinue) {
             this.disableSendStoppedEvents = false;
             pendContinue.shouldContinue = false;
             this.sendContinue();
@@ -2377,7 +2381,7 @@ export class GDBDebugSession extends LoggingDebugSession {
             pendContinue: PendingContinue): Promise<void> => {
             return new Promise(async (resolve) => {
                 const createBreakpoints = async () => {
-                    const currentBreakpoints = (this.breakpointMap.get(args.source.path) || []).map((bp) => bp.number);
+                    const currentBreakpoints = (this.breakpointMap.get(args.source.path) || []).map((bp) => bp.number).filter((n) => n !== undefined);
                     const hwOpt = this.hwBreakpointMgr.getGdbMiArg('src');
 
                     try {
@@ -2390,16 +2394,18 @@ export class GDBDebugSession extends LoggingDebugSession {
 
                         const all: Promise<OurSourceBreakpoint | MIError>[] = [];
                         const sourcepath = decodeURIComponent(args.source.path);
-                        args.breakpoints.forEach((brk) => {
-                            const arg: OurSourceBreakpoint = {
-                                ...brk,
-                                file: args.source.path,
-                                hwOpt: hwOpt
-                            };
-                            all.push(this.addBptSync<OurSourceBreakpoint | MIError>(() => {
-                                return this.miDebugger.addBreakPoint(arg);
-                            }, arg));
-                        });
+                        if (args.breakpoints) {
+                            args.breakpoints.forEach((brk) => {
+                                const arg: OurSourceBreakpoint = {
+                                    ...brk,
+                                    file: args.source.path,
+                                    hwOpt: hwOpt
+                                };
+                                all.push(this.addBptSync<OurSourceBreakpoint | MIError>(() => {
+                                    return this.miDebugger.addBreakPoint(arg);
+                                }, arg));
+                            });
+                        }
 
                         const brkpoints = await Promise.all(all);
 
@@ -2433,7 +2439,7 @@ export class GDBDebugSession extends LoggingDebugSession {
                         this.breakpointMap.set(args.source.path, bpts);
                         this.sendResponse(response);
                     } catch (msg) {
-                        this.sendErrorResponse(response, 9, msg.toString());
+                        this.sendErrorResponse(response, 9, (msg).toString());
                     }
 
                     this.continueIfNoMore(pendContinue);
@@ -2444,7 +2450,7 @@ export class GDBDebugSession extends LoggingDebugSession {
             });
         };
 
-        return this.allBreakPointsQ.add(doit, r, a);
+        return this.allBreakPointsQ.add(doit as any, r, a);
     }
 
     protected setInstructionBreakpointsRequest(
@@ -2466,7 +2472,7 @@ export class GDBDebugSession extends LoggingDebugSession {
                         const all: Promise<OurInstructionBreakpoint | MIError>[] = [];
                         const hwOpt = this.hwBreakpointMgr.getGdbMiArg('instr');
                         args.breakpoints.forEach((brk) => {
-                            const addr = parseInt(brk.instructionReference) + brk.offset || 0;
+                            const addr = parseInt(brk.instructionReference) + (brk.offset || 0);
                             const bpt: OurInstructionBreakpoint = { ...brk, number: -1, address: addr, htOpt: hwOpt };
                             all.push(this.addBptSync<OurInstructionBreakpoint | MIError>(() => {
                                 return this.miDebugger.addInstrBreakPoint(bpt);
@@ -2494,7 +2500,7 @@ export class GDBDebugSession extends LoggingDebugSession {
 
                         this.sendResponse(response);
                     } catch (msg) {
-                        this.sendErrorResponse(response, 9, msg.toString());
+                        this.sendErrorResponse(response, 9, (msg).toString());
                     }
 
                     this.continueIfNoMore(pendContinue);
@@ -2505,7 +2511,7 @@ export class GDBDebugSession extends LoggingDebugSession {
             });
         };
 
-        return this.allBreakPointsQ.add(doit, r, a);
+        return this.allBreakPointsQ.add(doit as any, r, a);
     }
 
     protected isVarRefGlobalOrStatic(varRefNum: number, id: any): 'global' | 'static' | undefined {
@@ -2547,8 +2553,8 @@ export class GDBDebugSession extends LoggingDebugSession {
 
         const ref = args.variablesReference;
         if ((ref !== undefined) && args.name && !((ref >= HandleRegions.REG_HANDLE_START) && (ref <= HandleRegions.REG_HANDLE_FINISH))) {
-            const id = this.variableHandles.get(args.variablesReference);
-            response.body.canPersist = !!this.isVarRefGlobalOrStatic(args.variablesReference, id);
+            const id = this.variableHandles.get(ref);
+            response.body.canPersist = !!this.isVarRefGlobalOrStatic(ref, id);
             const parentObj = id as VariableObject;
             const fullName = (parentObj ? (parentObj.fullExp || parentObj.exp) + '.' : '') + args.name;
             response.body.dataId = fullName;
@@ -2615,7 +2621,7 @@ export class GDBDebugSession extends LoggingDebugSession {
 
                         this.sendResponse(response);
                     } catch (msg) {
-                        this.sendErrorResponse(response, 9, msg.toString());
+                        this.sendErrorResponse(response, 9, (msg).toString());
                     }
 
                     this.continueIfNoMore(pendContinue);
@@ -2626,7 +2632,7 @@ export class GDBDebugSession extends LoggingDebugSession {
             });
         };
 
-        return this.allBreakPointsQ.add(doit, r, a);
+        return this.allBreakPointsQ.add(doit as any, r, a);
     }
 
     protected threadsRequest(response: DebugProtocol.ThreadsResponse): Promise<void> {
@@ -2640,7 +2646,7 @@ export class GDBDebugSession extends LoggingDebugSession {
             if (this.args.showDevDebugOutput) {
                 this.handleMsg('log', 'Returning dummy thread-id to workaround VSCode issue with pause button not working\n');
             }
-            const useThread = this.currentThreadId || (this.activeThreadIds.size ? this.activeThreadIds.values[0] : 1);
+            const useThread = this.currentThreadId || (this.activeThreadIds.size ? Array.from(this.activeThreadIds.values())[0] : 1);
             response.body.threads = [new Thread(useThread, 'cortex-debug-dummy-thread')];
             this.sendResponse(response);
             return Promise.resolve();
@@ -2649,7 +2655,7 @@ export class GDBDebugSession extends LoggingDebugSession {
         return new Promise<void>(async (resolve) => {
             try {
                 const threadIdNode = await this.miDebugger.sendCommand('thread-list-ids');
-                const threadIds: number[] = threadIdNode.result('thread-ids').map((ti) => parseInt(ti[1]));
+                const threadIds: number[] = threadIdNode.result('thread-ids').map((ti: any) => parseInt(ti[1]));
                 const currentThread = threadIdNode.result('current-thread-id');
 
                 if (!threadIds || (threadIds.length === 0)) {
@@ -2751,7 +2757,7 @@ export class GDBDebugSession extends LoggingDebugSession {
         args.startFrame = args.startFrame ?? 0;
         args.levels = args.levels ?? Infinity;
         const createDummy = () => {
-            response.body.stackFrames = [new StackFrame(encodeReference(args.threadId, 0), 'cortex-debug-dummy', null, 0, 0)];
+            response.body.stackFrames = [new StackFrame(encodeReference(args.threadId, 0), 'cortex-debug-dummy', undefined, 0, 0)];
             response.body.totalFrames = 1;
         };
         const isBusy = () => {
@@ -2784,8 +2790,11 @@ export class GDBDebugSession extends LoggingDebugSession {
                 const useMaxDepth = false;
                 const defMaxDepth = 1000;
                 const maxDepth = useMaxDepth ? await this.miDebugger.getStackDepth(args.threadId, defMaxDepth) : defMaxDepth;
-                const highFrame = Math.min(maxDepth, args.startFrame + args.levels) - 1;
-                const stack = await this.miDebugger.getStack(args.threadId, args.startFrame, highFrame);
+                const startFrame = args.startFrame || 0;
+                const levels = args.levels || 20;
+
+                const highFrame = Math.min(maxDepth, startFrame + levels) - 1;
+                const stack = await this.miDebugger.getStack(args.threadId, startFrame, highFrame);
                 const ret: StackFrame[] = [];
                 for (const element of stack) {
                     const stackId = encodeReference(args.threadId, element.level);
@@ -2803,7 +2812,7 @@ export class GDBDebugSession extends LoggingDebugSession {
                 resolve();
             } catch (err) {
                 if (isBusy()) {     // Between the time we asked for a info, a continue occurred
-                    this.sendErrorResponse(response, 12, `Failed to get Stack Trace: ${err.toString()}`);
+                    this.sendErrorResponse(response, 12, `Failed to get Stack Trace: ${(err).toString()}`);
                 } else {
                     this.sendResponse(response);
                 }
@@ -2933,7 +2942,7 @@ export class GDBDebugSession extends LoggingDebugSession {
                 throw new Error('Unable to parse response for reg. values');
             }
         } catch (error) {
-            this.sendErrorResponse(response, 115, `Unable to read registers: ${error.toString()}`);
+            this.sendErrorResponse(response, 115, `Unable to read registers: ${(error).toString()}`);
             this.sendEvent(new TelemetryEvent('Error', 'Reading Registers', ''));
             return;
         }
@@ -2945,10 +2954,10 @@ export class GDBDebugSession extends LoggingDebugSession {
         displayName: string | undefined, symOrExpr: string, gdbVarName: string, parentVarReference: number,
         threadId: number, frameId: number, isFloating: boolean): Promise<DebugProtocol.Variable> {
         try {
-            let varObj: VariableObject;
+            let varObj: VariableObject | undefined;
             let varId = this.variableHandlesReverse.get(gdbVarName);
             let createNewVar = varId === undefined;
-            let updateError;
+            let updateError: any;
             if (!createNewVar) {
                 try {
                     const changes = await this.miDebugger.varUpdate(gdbVarName, threadId, frameId);
@@ -2958,8 +2967,10 @@ export class GDBDebugSession extends LoggingDebugSession {
                         if (inScope === 'true') {
                             const name = MINode.valueOf(change, 'name');
                             const vId = this.variableHandlesReverse.get(name);
-                            const v = this.variableHandles.get(vId) as any;
-                            v.applyChanges(change);
+                            if (vId !== undefined) {
+                                const v = this.variableHandles.get(vId) as any;
+                                v.applyChanges(change);
+                            }
                         } else {
                             const msg = `${symOrExpr} currently not in scope`;
                             await this.miDebugger.sendCommand(`var-delete ${gdbVarName}`);
@@ -2970,7 +2981,9 @@ export class GDBDebugSession extends LoggingDebugSession {
                             throw new Error(msg);
                         }
                     }
-                    varObj = this.variableHandles.get(varId) as any;
+                    if (varId !== undefined) {
+                        varObj = this.variableHandles.get(varId) as any;
+                    }
                 } catch (err) {
                     updateError = err;
                 }
@@ -2996,7 +3009,7 @@ export class GDBDebugSession extends LoggingDebugSession {
                         this.handleMsg('stderr', `Could not create global/static variable ${symOrExpr}\n`);
                         this.handleMsg('stderr', `Error: ${err}\n`);
                     }
-                    varObj = null;
+                    throw err;
                 } else {
                     throw err;
                 }
@@ -3005,7 +3018,7 @@ export class GDBDebugSession extends LoggingDebugSession {
             if (isFloating && varObj) {
                 this.putFloatingVariable(parentVarReference, symOrExpr, varObj);
             }
-            return varObj?.toProtocolVariable(displayName || varObj.name);
+            return varObj.toProtocolVariable(displayName || varObj.name);
         } catch (err) {
             const ret: DebugProtocol.Variable = {
                 name: symOrExpr,
@@ -3099,7 +3112,7 @@ export class GDBDebugSession extends LoggingDebugSession {
         }
     }
 
-    private createVariable(arg, options?): number {
+    private createVariable(arg: any, options?: any): number {
         if (options) {
             return this.variableHandles.create(new ExtendedVariable(arg, options));
         } else {
@@ -3274,7 +3287,7 @@ export class GDBDebugSession extends LoggingDebugSession {
 
                     const varReq = id;
                     if (varReq.options.arg) {
-                        const strArr = [];
+                        const strArr: DebugProtocol.Variable[] = [];
                         let argsPart = true;
                         let arrIndex = 0;
                         const submit = () => {
@@ -3453,19 +3466,19 @@ export class GDBDebugSession extends LoggingDebugSession {
 
                 if (args.context !== 'repl') {
                     try {
-                        response.body = await this.evalExprInternal(args.expression, args.frameId, args.context, threadId, frameId);
+                        response.body = await this.evalExprInternal(args.expression, args.frameId, args.context || 'hover', threadId, frameId);
                         this.sendResponse(response);
                     } catch (err) {
                         if (this.isBusy()) {
                             this.busyError(response, args);
                         } else {
                             response.body = {
-                                result: (args.context === 'hover') ? null : `<${err.toString()}>`,
+                                result: (args.context === 'hover') ? '<error>' : `<${(err).toString()}>`,
                                 variablesReference: 0
                             };
                             this.sendResponse(response);
                             if (this.args.showDevDebugOutput) {
-                                this.handleMsg('stderr', args.context + ' ' + err.toString());
+                                this.handleMsg('stderr', args.context + ' ' + (err).toString());
                             }
                         }
                         // this.sendErrorResponse(response, 7, err.toString());
@@ -3496,11 +3509,11 @@ export class GDBDebugSession extends LoggingDebugSession {
                             this.sendResponse(response);
                             resolve();
                         }, (msg) => {
-                            this.sendErrorResponse(response, 8, msg.toString());
+                            this.sendErrorResponse(response, 8, (msg).toString());
                             resolve();
                         });
                     } catch (e) {
-                        this.sendErrorResponse(response, 8, e.toString());
+                        this.sendErrorResponse(response, 8, (e).toString());
                         resolve();
                     }
                 }
@@ -3512,12 +3525,12 @@ export class GDBDebugSession extends LoggingDebugSession {
 
     private async evalExprInternal(
         exp: string, frameRef: number | undefined, context: string,
-        threadId: number, frameId: number): Promise<DebugProtocol.EvaluateResponse['body']> {
+        threadId: number | undefined, frameId: number | undefined): Promise<DebugProtocol.EvaluateResponse['body']> {
         const varObjName = this.createVarNameFromExpr(exp, frameRef, context);
-        let varObj: VariableObject;
+        let varObj: VariableObject | undefined;
         let varId = this.variableHandlesReverse.get(varObjName);
         let createNewVar = varId === undefined;
-        let updateError;
+        let updateError: unknown;
         if (!createNewVar) {
             try {
                 const changes = await this.miDebugger.varUpdate(varObjName, threadId, frameId);
@@ -3527,8 +3540,10 @@ export class GDBDebugSession extends LoggingDebugSession {
                     if (inScope === 'true') {
                         const name = MINode.valueOf(change, 'name');
                         const vId = this.variableHandlesReverse.get(name);
-                        const v = this.variableHandles.get(vId) as any;
-                        v.applyChanges(change);
+                        if (vId !== undefined) {
+                            const v = this.variableHandles.get(vId) as any;
+                            v.applyChanges(change);
+                        }
                     } else {
                         const msg = `${exp} currently not in scope`;
                         await this.miDebugger.sendCommand(`var-delete ${varObjName}`);
@@ -3539,7 +3554,9 @@ export class GDBDebugSession extends LoggingDebugSession {
                         throw new Error(msg);
                     }
                 }
-                varObj = this.variableHandles.get(varId) as any;
+                if (varId !== undefined) {
+                    varObj = this.variableHandles.get(varId) as any;
+                }
             } catch (err) {
                 updateError = err;
             }
@@ -3594,8 +3611,8 @@ export class GDBDebugSession extends LoggingDebugSession {
             } else {
                 response.body = {
                     targets: [{
-                        id: result.number,
-                        label: args.source.name,
+                        id: result.number || 0,
+                        label: args.source.name || '',
                         column: args.column,
                         line: args.line
                     }]
@@ -3608,7 +3625,7 @@ export class GDBDebugSession extends LoggingDebugSession {
     }
 }
 
-function prettyStringArray(strings): unknown {
+function prettyStringArray(strings: any): unknown {
     if (typeof strings === 'object') {
         if (strings.length !== undefined) {
             return strings.join(', ');
@@ -3618,8 +3635,8 @@ function prettyStringArray(strings): unknown {
     } else { return strings; }
 }
 
-function initTwoCharsToIntMap(): object {
-    const obj = {};
+function initTwoCharsToIntMap(): any {
+    const obj: any = {};
     for (let i = 0; i < 256; i++) {
         const key = i.toString(16).padStart(2, '0');
         obj[key] = i;
