@@ -273,7 +273,7 @@ export class VariablesHandler {
                 let children: VariableObject[];
                 const childMap: { [name: string]: number } = {};
                 try {
-                    let vars: DebugProtocol.Variable[] = [];
+                    const vars: DebugProtocol.Variable[] = [];
                     children = this.getCachedChilren(pVar);
                     if (!children) {
                         children = await miDebugger.varListChildren(args.variablesReference, id.name, true);
