@@ -1297,6 +1297,86 @@ export class GDBDebugSession extends LoggingDebugSession {
                 this.sendResponse(response);
                 break;
             }
+            case 'add-watchpoint': {
+                const expr = args.expression;
+                const accessType = args.accessType || 'write';
+                if (!expr) {
+                    response.body = { success: false, message: 'No expression provided' };
+                    this.sendResponse(response);
+                    break;
+                }
+                const bp: OurDataBreakpoint = {
+                    dataId: expr,
+                    accessType: accessType as 'read' | 'write' | 'readWrite'
+                };
+                try {
+                    const result = await this.miDebugger.addDataBreakPoint(bp);
+                    this.dataBreakpointMap.set(result.number, result);
+                    response.body = {
+                        success: true,
+                        breakpointId: result.number,
+                        message: `Watchpoint set on ${expr} (${accessType})`
+                    };
+                } catch (e) {
+                    response.body = {
+                        success: false,
+                        message: `Failed to set watchpoint: ${e}`
+                    };
+                }
+                this.sendResponse(response);
+                break;
+            }
+            case 'remove-watchpoint': {
+                const expr = args.expression;
+                if (!expr) {
+                    response.body = { success: false, message: 'No expression provided' };
+                    this.sendResponse(response);
+                    break;
+                }
+                let found = false;
+                for (const [num, bp] of this.dataBreakpointMap) {
+                    if (bp.dataId === expr) {
+                        try {
+                            await this.miDebugger.removeBreakpoints([num]);
+                            this.dataBreakpointMap.delete(num);
+                            found = true;
+                            break;
+                        } catch (e) {
+                            response.body = { success: false, message: `Failed to remove watchpoint: ${e}` };
+                            this.sendResponse(response);
+                            return;
+                        }
+                    }
+                }
+                if (found) {
+                    response.body = { success: true, message: `Watchpoint removed on ${expr}` };
+                } else {
+                    response.body = { success: false, message: `Watchpoint not found for ${expr}` };
+                }
+                this.sendResponse(response);
+                break;
+            }
+            case 'confirm-watchpoint': {
+                const dapBpId = args.dapBreakpointId;
+                if (dapBpId !== undefined) {
+                    const ev: DebugProtocol.BreakpointEvent = {
+                        body: {
+                            reason: 'changed',
+                            breakpoint: {
+                                id: dapBpId,
+                                verified: true
+                            }
+                        },
+                        type: 'event',
+                        event: 'breakpoint',
+                        seq: 0
+                    };
+                    this.sendEvent(ev);
+                }
+                response.body = {};
+                this.sendResponse(response);
+                break;
+            }
             case 'load-function-symbols':
                 response.body = { functionSymbols: this.symbolTable.getFunctionSymbols() };
                 this.sendResponse(response);

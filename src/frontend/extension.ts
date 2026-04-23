@@ -50,6 +50,8 @@ export class CortexDebugExtension {
     private functionSymbols: SymbolInformation[] | null = null;
     private serverStartedEvent: ServerStartedPromise | undefined;
 
+    private watchpointInfo: Map<string, { accessType: 'read' | 'write' | 'readWrite'; proxyBp: vscode.Breakpoint; gdbBpId?: number }> = new Map();
+
     constructor(private context: vscode.ExtensionContext) {
         const config = vscode.workspace.getConfiguration('cortex-debug');
         this.startServerConsole(context, config.get(CortexDebugKeys.SERVER_LOG_FILE_NAME, '')); // Make this the first thing we do to be ready for the session
@@ -84,10 +86,15 @@ export class CortexDebugExtension {
             vscode.commands.registerCommand('cortex-debug.liveWatch.moveDown', this.moveDownLiveWatchExpr.bind(this)),
             vscode.commands.registerCommand('cortex-debug.liveWatch.editValue', this.editLiveWatchValue.bind(this)),
 
+            vscode.commands.registerCommand('cortex-debug.watchpointWrite', (arg) => this.addWatchpoint(arg, 'write')),
+            vscode.commands.registerCommand('cortex-debug.watchpointRead', (arg) => this.addWatchpoint(arg, 'read')),
+            vscode.commands.registerCommand('cortex-debug.watchpointReadWrite', (arg) => this.addWatchpoint(arg, 'readWrite')),
+
             vscode.workspace.onDidChangeConfiguration(this.settingsChanged.bind(this)),
             vscode.debug.onDidReceiveDebugSessionCustomEvent(this.receivedCustomEvent.bind(this)),
             vscode.debug.onDidStartDebugSession(this.debugSessionStarted.bind(this)),
             vscode.debug.onDidTerminateDebugSession(this.debugSessionTerminated.bind(this)),
+            vscode.debug.onDidChangeBreakpoints(this.breakpointsChanged.bind(this)),
             vscode.window.onDidChangeActiveTextEditor(this.activeEditorChanged.bind(this)),
             vscode.window.onDidCloseTerminal(this.terminalClosed.bind(this)),
             vscode.workspace.onDidCloseTextDocument(this.textDocsClosed.bind(this)),
@@ -443,6 +450,10 @@ export class CortexDebugExtension {
             vscode.window.showInformationMessage(`Debug session did not terminate cleanly ${e}\n${e ? (e as Error).stack : ''}. Please report this problem`);
         } finally {
             CDebugSession.RemoveSession(session);
+            // GDB process is gone, so all watchpoints are cleared. Mark them as inactive in our map.
+            for (const info of this.watchpointInfo.values()) {
+                info.gdbBpId = undefined;
+            }
         }
     }
 
@@ -911,6 +922,145 @@ export class CortexDebugExtension {
 
     private editLiveWatchValue(node: any) {
         this.liveWatchProvider.editValue(node);
+    }
+
+    private breakpointsChanged(e: vscode.BreakpointsChangeEvent) {
+        for (const bp of e.removed) {
+            const wpExpr = this.findWatchpointByBreakpoint(bp);
+            if (wpExpr) {
+                this.removeWatchpoint(wpExpr);
+            }
+        }
+        for (const bp of e.changed) {
+            const wpExpr = this.findWatchpointByBreakpoint(bp);
+            if (wpExpr) {
+                if (bp.enabled) {
+                    this.enableWatchpoint(wpExpr);
+                } else {
+                    this.disableWatchpoint(wpExpr);
+                }
+            }
+        }
+    }
+
+    private findWatchpointByBreakpoint(bp: vscode.Breakpoint): string | undefined {
+        for (const [expr, info] of this.watchpointInfo) {
+            if (info.proxyBp.id === bp.id) {
+                return expr;
+            }
+        }
+        return undefined;
+    }
+
+    private async removeWatchpoint(expr: string) {
+        const info = this.watchpointInfo.get(expr);
+        if (info) {
+            this.watchpointInfo.delete(expr);
+            try {
+                const session = vscode.debug.activeDebugSession;
+                if (session && session.type === 'cortex-debug') {
+                    await session.customRequest('remove-watchpoint', { expression: expr });
+                }
+            } catch (e) {
+                vscode.window.showErrorMessage(`Failed to remove watchpoint: ${e}`);
+            }
+        }
+    }
+
+    private async disableWatchpoint(expr: string) {
+        const info = this.watchpointInfo.get(expr);
+        if (info && info.gdbBpId !== undefined) {
+            try {
+                const session = vscode.debug.activeDebugSession;
+                if (session && session.type === 'cortex-debug') {
+                    await session.customRequest('remove-watchpoint', { expression: expr });
+                    info.gdbBpId = undefined;
+                }
+            } catch (e) {
+                vscode.window.showErrorMessage(`Failed to disable watchpoint: ${e}`);
+            }
+        }
+    }
+
+    private async enableWatchpoint(expr: string) {
+        const info = this.watchpointInfo.get(expr);
+        if (info && info.gdbBpId === undefined) {
+            try {
+                const session = vscode.debug.activeDebugSession;
+                if (session && session.type === 'cortex-debug') {
+                    const result = await session.customRequest('add-watchpoint', {
+                        expression: expr,
+                        accessType: info.accessType
+                    });
+                    if (result.success) {
+                        info.gdbBpId = result.breakpointId;
+                        session.customRequest('confirm-watchpoint', {
+                            expression: expr,
+                            breakpointId: result.breakpointId,
+                            dapBreakpointId: info.proxyBp.id
+                        }).then(() => {}, () => {});
+                    }
+                }
+            } catch (e) {
+                vscode.window.showErrorMessage(`Failed to enable watchpoint: ${e}`);
+            }
+        }
+    }
+
+    private async addWatchpoint(arg: any, accessType: 'read' | 'write' | 'readWrite') {
+        let mySession: CDebugSession | undefined;
+        let expr: string | undefined;
+
+        if (arg && typeof arg.getExpr === 'function') {
+            // Live Watch node
+            expr = arg.getExpr();
+            const session = LiveWatchTreeProvider.session || vscode.debug.activeDebugSession;
+            if (session) {
+                mySession = CDebugSession.FindSession(session);
+            }
+        } else {
+            // Variables/Watch window
+            if (!arg || !arg.sessionId) {
+                return;
+            }
+            mySession = CDebugSession.FindSessionById(arg.sessionId);
+            expr = arg.variable?.evaluateName;
+        }
+
+        if (!mySession) {
+            vscode.window.showErrorMessage('addWatchpoint: No active debug session');
+            return;
+        }
+        if (!expr) {
+            vscode.window.showErrorMessage('No expression to set watchpoint on');
+            return;
+        }
+        try {
+            const result = await mySession.session.customRequest('add-watchpoint', {
+                expression: expr,
+                accessType: accessType
+            });
+            if (result.success) {
+                const accessLabel = accessType === 'write' ? '写入' : accessType === 'read' ? '读取' : '读取/写入';
+                const proxyBp = new vscode.FunctionBreakpoint(`${expr} ${accessLabel}`, true, undefined, undefined, undefined);
+                vscode.debug.addBreakpoints([proxyBp]);
+                const addedBps = vscode.debug.breakpoints.filter((bp) => bp instanceof vscode.FunctionBreakpoint && bp.functionName === proxyBp.functionName);
+                if (addedBps.length > 0) {
+                    const addedBp = addedBps[addedBps.length - 1];
+                    this.watchpointInfo.set(expr, { accessType, proxyBp: addedBp, gdbBpId: result.breakpointId });
+                    mySession.session.customRequest('confirm-watchpoint', {
+                        expression: expr,
+                        breakpointId: result.breakpointId,
+                        dapBreakpointId: addedBp.id
+                    }).then(() => {}, () => {});
+                }
+                // vscode.window.showInformationMessage(`Watchpoint set on ${expr} (${accessType}), id: ${result.breakpointId}`);
+            } else {
+                vscode.window.showErrorMessage(`Failed to set watchpoint: ${result.message}`);
+            }
+        } catch (e) {
+            vscode.window.showErrorMessage(`Failed to set watchpoint: ${e}`);
+        }
     }
 }
 

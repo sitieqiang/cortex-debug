@@ -1,5 +1,5 @@
 {
-    "version": "1.13.0-pre10",
+    "version": "1.13.0-pre11",
     "preview": false,
     "activationEvents": [
         "onDebugResolve:cortex-debug",
@@ -475,6 +475,21 @@
                 "command": "cortex-debug.liveWatch.addExpr",
                 "title": "Add expression to Live Watch window",
                 "icon": "$(plus)"
+            },
+            {
+                "category": "Cortex-Debug",
+                "command": "cortex-debug.watchpointWrite",
+                "title": "Set Write Watchpoint"
+            },
+            {
+                "category": "Cortex-Debug",
+                "command": "cortex-debug.watchpointRead",
+                "title": "Set Read Watchpoint"
+            },
+            {
+                "category": "Cortex-Debug",
+                "command": "cortex-debug.watchpointReadWrite",
+                "title": "Set Read/Write Watchpoint"
             }
         ],
         "keybindings": [
@@ -3074,6 +3089,21 @@
                     "command": "cortex-debug.liveWatch.removeExpr",
                     "when": "view == cortex-debug.liveWatch && viewItem == expression",
                     "group": "inline"
+                },
+                {
+                    "command": "cortex-debug.watchpointWrite",
+                    "when": "view == cortex-debug.liveWatch && inDebugMode && debugType == 'cortex-debug' && debugState == stopped && (viewItem == expression || viewItem == field)",
+                    "group": "watchpoint@1"
+                },
+                {
+                    "command": "cortex-debug.watchpointRead",
+                    "when": "view == cortex-debug.liveWatch && inDebugMode && debugType == 'cortex-debug' && debugState == stopped && (viewItem == expression || viewItem == field)",
+                    "group": "watchpoint@2"
+                },
+                {
+                    "command": "cortex-debug.watchpointReadWrite",
+                    "when": "view == cortex-debug.liveWatch && inDebugMode && debugType == 'cortex-debug' && debugState == stopped && (viewItem == expression || viewItem == field)",
+                    "group": "watchpoint@3"
                 }
             ],
             "view/title": [
@@ -3116,8 +3146,40 @@
             "debug/variables/context": [
                 {
                     "command": "cortex-debug.liveWatch.addToLiveWatch",
-                    "when": "inDebugMode && debugType == 'cortex-debug' && debugState == stopped",
+                    "when": "view == workbench.debug.variablesView && inDebugMode && debugType == 'cortex-debug' && debugState == stopped",
                     "group": "navigation"
+                },
+                {
+                    "command": "cortex-debug.watchpointWrite",
+                    "when": "view == workbench.debug.variablesView && inDebugMode && debugType == 'cortex-debug' && debugState == stopped",
+                    "group": "watchpoint@1"
+                },
+                {
+                    "command": "cortex-debug.watchpointRead",
+                    "when": "view == workbench.debug.variablesView && inDebugMode && debugType == 'cortex-debug' && debugState == stopped",
+                    "group": "watchpoint@2"
+                },
+                {
+                    "command": "cortex-debug.watchpointReadWrite",
+                    "when": "view == workbench.debug.variablesView && inDebugMode && debugType == 'cortex-debug' && debugState == stopped",
+                    "group": "watchpoint@3"
+                }
+            ],
+            "debug/watch/context": [
+                {
+                    "command": "cortex-debug.watchpointWrite",
+                    "when": "inDebugMode && debugType == 'cortex-debug' && debugState == stopped",
+                    "group": "watchpoint@1"
+                },
+                {
+                    "command": "cortex-debug.watchpointRead",
+                    "when": "inDebugMode && debugType == 'cortex-debug' && debugState == stopped",
+                    "group": "watchpoint@2"
+                },
+                {
+                    "command": "cortex-debug.watchpointReadWrite",
+                    "when": "inDebugMode && debugType == 'cortex-debug' && debugState == stopped",
+                    "group": "watchpoint@3"
                 }
             ]
         },
