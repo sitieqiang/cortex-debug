@@ -100,6 +100,19 @@ export class CortexDebugExtension {
 
             vscode.commands.registerCommand('cortex-debug.riscvCsr.refresh', () => this.riscvCsrProvider.refreshAll()),
             vscode.commands.registerCommand('cortex-debug.riscvCsr.editValue', (node: CsrRegisterNode) => this.riscvCsrProvider.editValue(node)),
+            vscode.commands.registerCommand('cortex-debug.riscvCsr.search', async () => {
+                const node = await this.riscvCsrProvider.searchRegister();
+                if (node) {
+                    const parent = node.getParent() as CsrGroupNode;
+                    if (parent) {
+                        parent.expanded = true;
+                    }
+                    node.expanded = true;
+                    this.riscvCsrProvider.fire();
+                    await this.riscvCsrProvider.readRegister(node);
+                    this.riscvCsrTreeView.reveal(node, { expand: true, select: true, focus: true });
+                }
+            }),
 
             this.riscvCsrTreeView,
             this.riscvCsrTreeView.onDidExpandElement((e) => {

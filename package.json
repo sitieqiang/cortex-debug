@@ -1,5 +1,5 @@
 {
-    "version": "1.13.0-pre11",
+    "version": "1.13.0-gatesea-pre11",
     "preview": false,
     "activationEvents": [
         "onDebugResolve:cortex-debug",
@@ -502,6 +502,12 @@
                 "command": "cortex-debug.riscvCsr.editValue",
                 "title": "Edit CSR Value",
                 "icon": "$(edit)"
+            },
+            {
+                "category": "Cortex-Debug",
+                "command": "cortex-debug.riscvCsr.search",
+                "title": "Search CSR Register",
+                "icon": "$(search)"
             }
         ],
         "keybindings": [
@@ -3062,6 +3068,10 @@
                     "when": "debugType == cortex-debug"
                 },
                 {
+                    "command": "cortex-debug.riscvCsr.search",
+                    "when": "debugType == cortex-debug"
+                },
+                {
                     "command": "cortex-debug.examineMemory",
                     "when": "debugType == cortex-debug"
                 },
@@ -3143,9 +3153,14 @@
             ],
             "view/title": [
                 {
+                    "command": "cortex-debug.riscvCsr.search",
+                    "when": "view == cortex-debug.riscvCsr",
+                    "group": "navigation@1"
+                },
+                {
                     "command": "cortex-debug.riscvCsr.refresh",
                     "when": "view == cortex-debug.riscvCsr && inDebugMode && debugType == 'cortex-debug' && debugState == stopped",
-                    "group": "navigation"
+                    "group": "navigation@2"
                 },
                 {
                     "command": "cortex-debug.liveWatch.addExpr",

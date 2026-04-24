@@ -282,8 +282,11 @@ export class RiscvCsrProvider implements TreeDataProvider<CsrNode> {
             const content = fs.readFileSync(xmlPath, 'utf-8');
             this.xmlGroups = parseCsrXml(content);
             this.groups = this.xmlGroups.map((g) => {
-                const regNodes = g.registers.map((r) => new CsrRegisterNode(undefined, r));
+                const regNodes: CsrRegisterNode[] = [];
                 const groupNode = new CsrGroupNode(undefined, g, regNodes);
+                for (const r of g.registers) {
+                    regNodes.push(new CsrRegisterNode(groupNode, r));
+                }
                 groupNode.expanded = g.defaultOpen;
                 return groupNode;
             });
@@ -304,6 +307,10 @@ export class RiscvCsrProvider implements TreeDataProvider<CsrNode> {
             return this.groups;
         }
         return element.getChildren();
+    }
+
+    public getParent(element: CsrNode): ProviderResult<CsrNode> {
+        return element.getParent() as CsrNode | undefined;
     }
 
     public setSession(session: DebugSession | undefined): void {
@@ -347,11 +354,20 @@ export class RiscvCsrProvider implements TreeDataProvider<CsrNode> {
 
     public refreshGroup(group: CsrGroupNode): void {
         if (!this.session) { return; }
-        const registers = group.children;
+        // Only refresh registers that are individually expanded
+        const registers = group.children.filter((r) => r.expanded);
+        if (registers.length === 0) { return; }
         for (const reg of registers) {
             reg.updating = true;
         }
         this.fire();
+        // Read values asynchronously
+        const doRead = async () => {
+            for (const reg of registers) {
+                await this.readRegister(reg);
+            }
+        };
+        doRead();
     }
 
     public async readRegister(reg: CsrRegisterNode): Promise<void> {
@@ -396,9 +412,6 @@ export class RiscvCsrProvider implements TreeDataProvider<CsrNode> {
 
     public expandGroup(group: CsrGroupNode): void {
         group.expanded = true;
-        if (this.session) {
-            this.refreshGroup(group);
-        }
     }
 
     public async refreshRegisterIfNeeded(reg: CsrRegisterNode): Promise<void> {
@@ -448,5 +461,37 @@ export class RiscvCsrProvider implements TreeDataProvider<CsrNode> {
         if (result !== undefined && result !== current) {
             await this.writeRegister(node, result.trim());
         }
+    }
+
+    public async searchRegister(): Promise<CsrRegisterNode | undefined> {
+        if (this.groups.length === 0) {
+            window.showInformationMessage('No CSR registers loaded');
+            return undefined;
+        }
+
+        interface CsrQuickPickItem extends vscode.QuickPickItem {
+            node: CsrRegisterNode;
+        }
+
+        const items: CsrQuickPickItem[] = [];
+        for (const group of this.groups) {
+            for (const reg of group.children) {
+                const addrHex = '0x' + reg.def.address.toString(16).toUpperCase().padStart(4, '0');
+                items.push({
+                    label: reg.def.name,
+                    description: `${addrHex}  ${group.def.name}`,
+                    node: reg
+                });
+            }
+        }
+
+        const selected = await window.showQuickPick(items, {
+            placeHolder: 'Search by register name or address (e.g. mstatus or 0x300)',
+            ignoreFocusOut: true,
+            matchOnDescription: true,
+            matchOnDetail: true
+        });
+
+        return selected?.node;
     }
 }
