@@ -106,6 +106,16 @@ export function parseCsrXml(content: string): CsrGroupDef[] {
                 reg.bitFields.push(bitField);
             }
 
+            // If no BitField defined, create a default one covering the whole register
+            if (reg.bitFields.length === 0) {
+                reg.bitFields.push({
+                    name: 'Value',
+                    size: reg.size * 8,
+                    start: 0,
+                    enums: []
+                });
+            }
+
             group.registers.push(reg);
         }
 
@@ -211,8 +221,8 @@ export class CsrBitFieldNode extends CsrNode {
     }
 
     public getTreeItem(): TreeItem | Promise<TreeItem> {
-        const mask = ((1 << this.def.size) - 1);
-        const val = (this.registerValue >> this.def.start) & mask;
+        const mask = this.def.size >= 32 ? 0xFFFFFFFF : (Math.pow(2, this.def.size) - 1);
+        const val = (this.registerValue >>> this.def.start) & mask;
         let enumStr = '';
         if (this.def.enums.length > 0) {
             const enumMatch = this.def.enums.find((e) => e.value === val);
