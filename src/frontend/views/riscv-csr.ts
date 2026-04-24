@@ -52,8 +52,10 @@ export function parseCsrXml(content: string): CsrGroupDef[] {
         const defaultVisible = groupAttrs['default_visible'] !== 'No';
         const group: CsrGroupDef = { name: groupName, registers: [], defaultOpen, defaultVisible };
 
-        const registerContent = groupMatch[2];
-        const registerRegex = /<Register([^>]*)\/?>(?:([\s\S]*?)<\/Register>)?/g;
+        // Expand self-closing tags to avoid regex ambiguity with \/?>
+        const registerContent = groupMatch[2]
+            .replace(/<Register([^>]*)\/>/g, '<Register$1></Register>');
+        const registerRegex = /<Register([^>]*)>([\s\S]*?)<\/Register>/g;
         let regMatch;
         while ((regMatch = registerRegex.exec(registerContent)) !== null) {
             const regAttrs = parseXmlAttributes(regMatch[1]);
@@ -72,8 +74,10 @@ export function parseCsrXml(content: string): CsrGroupDef[] {
                 bitFields: []
             };
 
-            const regContent = regMatch[2] || '';
-            const bitFieldRegex = /<BitField([^>]*)\/?>(?:([\s\S]*?)<\/BitField>)?/g;
+            // Expand self-closing BitField tags
+            const regContent = (regMatch[2] || '')
+                .replace(/<BitField([^>]*)\/>/g, '<BitField$1></BitField>');
+            const bitFieldRegex = /<BitField([^>]*)>([\s\S]*?)<\/BitField>/g;
             let bfMatch;
             while ((bfMatch = bitFieldRegex.exec(regContent)) !== null) {
                 const bfAttrs = parseXmlAttributes(bfMatch[1]);
