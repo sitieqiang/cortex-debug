@@ -55,6 +55,7 @@ export class MI2 extends EventEmitter implements IBackend {
     protected nextTokenComing = 1;          // This will be the next token output from gdb
     protected handlers: { [index: number]: (info: MINode) => any } = {};
     protected needOutput: { [index: number]: '' } = {};
+    protected needOutputCaptureTypes: { [index: number]: string[] } = {};
     protected buffer: string = '';
     protected errbuf: string = '';
     protected process: ChildProcess.ChildProcess;
@@ -301,7 +302,9 @@ export class MI2 extends EventEmitter implements IBackend {
                 if (parsed.outOfBandRecord) {
                     parsed.outOfBandRecord.forEach((record) => {
                         if (record.isStream) {
-                            if ((record.type === 'console') && (this.needOutput[this.nextTokenComing] !== undefined)) {
+                            const captureTypes = this.needOutputCaptureTypes[this.nextTokenComing];
+                            if (this.needOutput[this.nextTokenComing] !== undefined
+                                && captureTypes && captureTypes.includes(record.type)) {
                                 this.needOutput[this.nextTokenComing] += record.content;
                             } else {
                                 this.log(record.type, record.content);
@@ -1130,6 +1133,7 @@ export class MI2 extends EventEmitter implements IBackend {
             };
             if (args.swallowStdout) {
                 this.needOutput[sel] = '';
+                this.needOutputCaptureTypes[sel] = args.captureStreamTypes || ['console'];
             }
             const save = this.debugOutput;
             if (args.forceNoDebug && this.debugOutput) {
@@ -1142,6 +1146,7 @@ export class MI2 extends EventEmitter implements IBackend {
                 this.debugOutput = save;
                 if (args.swallowStdout) {
                     delete this.needOutput[sel];
+                    delete this.needOutputCaptureTypes[sel];
                 }
                 if (node.resultRecords.resultClass === 'error') {
                     errReport(node);
@@ -1163,7 +1168,7 @@ export class MI2 extends EventEmitter implements IBackend {
 
     private commandQueue: SendCommaindIF[] = [];
     private commandQueueBusy = false;
-    public sendCommand(command: string, suppressFailure = false, swallowStdout = false, forceNoDebug = false): Thenable<MINode> {
+    public sendCommand(command: string, suppressFailure = false, swallowStdout = false, forceNoDebug = false, captureStreamTypes?: string[]): Thenable<MINode> {
         // We queue these requests as there can be a flood of them. Especially if you have two variables or same name back to back
         // the second can fail because we are still in the process of creating that variable (update, fail, then create). Sources
         // for requests are from RTOS viewers, watch windows and hover. Even a watch window can have duplicates.
@@ -1173,6 +1178,7 @@ export class MI2 extends EventEmitter implements IBackend {
                 suppressFailure: suppressFailure,
                 swallowStdout: swallowStdout,
                 forceNoDebug: forceNoDebug,
+                captureStreamTypes: captureStreamTypes,
                 resolve: resolve,
                 reject: reject
             };
@@ -1273,6 +1279,7 @@ interface SendCommaindIF {
     suppressFailure: boolean;
     swallowStdout: boolean;
     forceNoDebug: boolean;
+    captureStreamTypes?: string[];
     resolve: any;
     reject: any;
 }

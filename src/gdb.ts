@@ -1455,6 +1455,83 @@ export class GDBDebugSession extends LoggingDebugSession {
                 this.swoLaunched = undefined;
                 break;
             }
+            case 'read-csr': {
+                if (isBusy) { return retFunc(); }
+                const addr = args.addr;
+                const name = args.name;
+                if (addr === undefined) {
+                    response.body = { value: '0x0' };
+                    this.sendResponse(response);
+                    break;
+                }
+
+                // Fallback: JLink monitor readcsr
+                const hexAddr = '0x' + (addr >>> 0).toString(16).toUpperCase();
+                try {
+                    const node = await this.miDebugger.sendCommand(
+                        `interpreter-exec console "monitor readcsr ${hexAddr}"`,
+                        false,          // suppressFailure
+                        true,           // swallowStdout
+                        false,          // forceNoDebug
+                        ['console', 'target']  // captureStreamTypes: J-Link returns CSR values via target stream (@)
+                    );
+                    const output = node.output || '';
+                    let value = '0x00000000';
+                    const match = output.match(/[=:]\s*(0x[0-9a-fA-F]+)/);
+                    if (match) {
+                        value = match[1].toLowerCase();
+                    } else {
+                        const fallback = output.match(/0x[0-9a-fA-F]+/g);
+                        if (fallback && fallback.length > 0) {
+                            value = fallback[fallback.length - 1].toLowerCase();
+                        }
+                    }
+                    response.body = { value: value };
+                    this.sendResponse(response);
+                } catch (error) {
+                    response.body = { value: '0x????????' };
+                    this.sendResponse(response);
+                }
+                break;
+            }
+            case 'write-csr': {
+                if (isBusy) { return retFunc(); }
+                const addr = args.addr;
+                const value = args.value;
+                if (addr === undefined || value === undefined) {
+                    response.body = { success: false, message: 'Missing address or value' };
+                    this.sendResponse(response);
+                    break;
+                }
+                const hexAddr = '0x' + (addr >>> 0).toString(16).toUpperCase();
+                let hexValue = value;
+                if (typeof value === 'number') {
+                    hexValue = '0x' + (value >>> 0).toString(16).toUpperCase();
+                } else if (typeof value === 'string' && !value.trim().toLowerCase().startsWith('0x')) {
+                    // Assume decimal string, convert to hex
+                    const num = parseInt(value.trim(), 10);
+                    if (!isNaN(num)) {
+                        hexValue = '0x' + (num >>> 0).toString(16).toUpperCase();
+                    }
+                }
+                try {
+                    const node = await this.miDebugger.sendCommand(
+                        `interpreter-exec console "monitor writecsr ${hexAddr} ${hexValue}"`,
+                        false,          // suppressFailure
+                        true,           // swallowStdout
+                        false,          // forceNoDebug
+                        ['console', 'target']  // captureStreamTypes: J-Link returns CSR results via target stream (@)
+                    );
+                    const output = node.output || '';
+                    // JLink writecsr usually outputs nothing or "OK" on success
+                    response.body = { success: true, output: output.trim() };
+                    this.sendResponse(response);
+                } catch (error) {
+                    response.body = { success: false, message: error.toString() };
+                    this.sendResponse(response);
+                }
+                break;
+            }
             default:
                 response.body = { error: 'Invalid command.' };
                 this.sendResponse(response);

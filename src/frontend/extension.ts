@@ -4,6 +4,7 @@ import * as path from 'path';
 
 import { CortexDebugChannel } from '../dbgmsgs';
 import { LiveWatchTreeProvider, LiveVariableNode } from './views/live-watch';
+import { RiscvCsrProvider, CsrGroupNode, CsrRegisterNode } from './views/riscv-csr';
 
 import { RTTCore, SWOCore } from './swo/core';
 import {
@@ -45,6 +46,8 @@ export class CortexDebugExtension {
     private memoryProvider: MemoryContentProvider;
     private liveWatchProvider: LiveWatchTreeProvider;
     private liveWatchTreeView: vscode.TreeView<LiveVariableNode>;
+    private riscvCsrProvider: RiscvCsrProvider;
+    private riscvCsrTreeView: vscode.TreeView<any>;
 
     private SVDDirectory: SVDInfo[] = [];
     private functionSymbols: SymbolInformation[] | null = null;
@@ -60,6 +63,11 @@ export class CortexDebugExtension {
         this.liveWatchProvider = new LiveWatchTreeProvider(this.context);
         this.liveWatchTreeView = vscode.window.createTreeView('cortex-debug.liveWatch', {
             treeDataProvider: this.liveWatchProvider
+        });
+
+        this.riscvCsrProvider = new RiscvCsrProvider();
+        this.riscvCsrTreeView = vscode.window.createTreeView('cortex-debug.riscvCsr', {
+            treeDataProvider: this.riscvCsrProvider
         });
 
         vscode.commands.executeCommand('setContext', `cortex-debug:${CortexDebugKeys.VARIABLE_DISPLAY_MODE}`,
@@ -89,6 +97,26 @@ export class CortexDebugExtension {
             vscode.commands.registerCommand('cortex-debug.watchpointWrite', (arg) => this.addWatchpoint(arg, 'write')),
             vscode.commands.registerCommand('cortex-debug.watchpointRead', (arg) => this.addWatchpoint(arg, 'read')),
             vscode.commands.registerCommand('cortex-debug.watchpointReadWrite', (arg) => this.addWatchpoint(arg, 'readWrite')),
+
+            vscode.commands.registerCommand('cortex-debug.riscvCsr.refresh', () => this.riscvCsrProvider.refreshAll()),
+            vscode.commands.registerCommand('cortex-debug.riscvCsr.editValue', (node: CsrRegisterNode) => this.riscvCsrProvider.editValue(node)),
+
+            this.riscvCsrTreeView,
+            this.riscvCsrTreeView.onDidExpandElement((e) => {
+                if (e.element instanceof CsrGroupNode) {
+                    this.riscvCsrProvider.expandGroup(e.element);
+                } else if (e.element instanceof CsrRegisterNode) {
+                    this.riscvCsrProvider.expandRegister(e.element);
+                    this.riscvCsrProvider.refreshRegisterIfNeeded(e.element);
+                }
+            }),
+            this.riscvCsrTreeView.onDidCollapseElement((e) => {
+                if (e.element instanceof CsrGroupNode) {
+                    this.riscvCsrProvider.collapseGroup(e.element);
+                } else if (e.element instanceof CsrRegisterNode) {
+                    this.riscvCsrProvider.collapseRegister(e.element);
+                }
+            }),
 
             vscode.workspace.onDidChangeConfiguration(this.settingsChanged.bind(this)),
             vscode.debug.onDidReceiveDebugSessionCustomEvent(this.receivedCustomEvent.bind(this)),
@@ -413,6 +441,21 @@ export class CortexDebugExtension {
                 svdfile = this.getSVDFile(args.device);
             }
 
+            if (args.riscvCsrFile) {
+                let csrFile = args.riscvCsrFile;
+                if (!path.isAbsolute(csrFile)) {
+                    csrFile = path.normalize(path.join(args.cwd || session.workspaceFolder?.uri.fsPath || '', csrFile));
+                }
+                console.log('[RISCV-CSR] Loading from:', csrFile);
+                this.riscvCsrProvider.loadXml(csrFile);
+                this.riscvCsrProvider.setSession(session);
+                this.riscvCsrProvider.fire();
+            } else {
+                console.log('[RISCV-CSR] riscvCsrFile not configured in launch.json');
+                this.riscvCsrProvider.loadXml('');
+                this.riscvCsrProvider.setSession(undefined);
+            }
+
             if (newSession.swoSource) {
                 this.initializeSWO(session, args);
             }
@@ -431,6 +474,7 @@ export class CortexDebugExtension {
         const mySession = CDebugSession.FindSession(session);
         try {
             this.liveWatchProvider?.debugSessionTerminated(session);
+            this.riscvCsrProvider?.setSession(undefined);
             if (mySession?.swo) {
                 mySession.swo.debugSessionTerminated();
             }
@@ -709,6 +753,8 @@ export class CortexDebugExtension {
         if (mySession) {
             mySession.status = 'stopped';
             this.liveWatchProvider?.debugStopped(e.session);
+            this.riscvCsrProvider?.invalidateExpandedValues();
+            this.riscvCsrProvider?.refreshAll();
             vscode.workspace.textDocuments.filter((td) => td.fileName.endsWith('.cdmem')).forEach((doc) => {
                 if (!doc.isClosed) {
                     this.memoryProvider.update(doc);

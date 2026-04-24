@@ -490,6 +490,18 @@
                 "category": "Cortex-Debug",
                 "command": "cortex-debug.watchpointReadWrite",
                 "title": "Set Read/Write Watchpoint"
+            },
+            {
+                "category": "Cortex-Debug",
+                "command": "cortex-debug.riscvCsr.refresh",
+                "title": "Refresh RISC-V CSR Registers",
+                "icon": "$(refresh)"
+            },
+            {
+                "category": "Cortex-Debug",
+                "command": "cortex-debug.riscvCsr.editValue",
+                "title": "Edit CSR Value",
+                "icon": "$(edit)"
             }
         ],
         "keybindings": [
@@ -1140,6 +1152,11 @@
                             "svdFile": {
                                 "default": null,
                                 "description": "This is for 'XPERIPHERALS' window provided by 'mcu-debug.peripheral-viewer'. It can be a simple file name or more based on a CMSIS pack or deviceName. See 'mcu-debug.peripheral-viewer' for format",
+                                "type": "string"
+                            },
+                            "riscvCsrFile": {
+                                "default": null,
+                                "description": "Path to a RISC-V CSR register definition XML file (e.g. cpu_registers_riscv.xml). When set, enables the RISC-V CSR Registers panel.",
                                 "type": "string"
                             },
                             "svdPath": {
@@ -2367,6 +2384,11 @@
                                 "description": "This is for 'XPERIPHERALS' window provided by 'mcu-debug.peripheral-viewer'. It can be a simple file name or more based on a CMSIS pack or deviceName. See 'mcu-debug.peripheral-viewer' for format",
                                 "type": "string"
                             },
+                            "riscvCsrFile": {
+                                "default": null,
+                                "description": "Path to a RISC-V CSR register definition XML file (e.g. cpu_registers_riscv.xml). When set, enables the RISC-V CSR Registers panel.",
+                                "type": "string"
+                            },
                             "svdPath": {
                                 "default": null,
                                 "description": "This is for 'XPERIPHERALS' window provided by 'mcu-debug.peripheral-viewer' and 'Embedded Tools' Extension from Microsoft. It can be a simple file name. For 'mcu-debug.peripheral-viewer' or more based on a CMSIS pack or deviceName. See 'mcu-debug.peripheral-viewer' for format",
@@ -3032,6 +3054,14 @@
         "menus": {
             "commandPalette": [
                 {
+                    "command": "cortex-debug.riscvCsr.refresh",
+                    "when": "debugType == cortex-debug"
+                },
+                {
+                    "command": "cortex-debug.riscvCsr.editValue",
+                    "when": "debugType == cortex-debug"
+                },
+                {
                     "command": "cortex-debug.examineMemory",
                     "when": "debugType == cortex-debug"
                 },
@@ -3060,6 +3090,11 @@
                 }
             ],
             "view/item/context": [
+                {
+                    "command": "cortex-debug.riscvCsr.editValue",
+                    "when": "view == cortex-debug.riscvCsr && viewItem == csrRegister && inDebugMode && debugType == 'cortex-debug' && debugState == stopped",
+                    "group": "inline"
+                },
                 {
                     "command": "cortex-debug.liveWatch.editExpr",
                     "when": "view == cortex-debug.liveWatch && viewItem == expression",
@@ -3107,6 +3142,11 @@
                 }
             ],
             "view/title": [
+                {
+                    "command": "cortex-debug.riscvCsr.refresh",
+                    "when": "view == cortex-debug.riscvCsr && inDebugMode && debugType == 'cortex-debug' && debugState == stopped",
+                    "group": "navigation"
+                },
                 {
                     "command": "cortex-debug.liveWatch.addExpr",
                     "when": "view == cortex-debug.liveWatch",
@@ -3183,11 +3223,27 @@
                 }
             ]
         },
+        "viewsContainers": {
+            "panel": [
+                {
+                    "id": "cortex-debug-panel",
+                    "title": "CSR-REG",
+                    "icon": "images/icon.png"
+                }
+            ]
+        },
         "views": {
             "debug": [
                 {
                     "id": "cortex-debug.liveWatch",
                     "name": "Cortex Live Watch",
+                    "when": "debugType == cortex-debug"
+                }
+            ],
+            "cortex-debug-panel": [
+                {
+                    "id": "cortex-debug.riscvCsr",
+                    "name": "CSR-REG",
                     "when": "debugType == cortex-debug"
                 }
             ]
