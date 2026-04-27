@@ -69,7 +69,7 @@ If the type is marked as `{...}` it means that it is a complex item can have mul
 | preLaunchCommands | string[] | Launch | Additional GDB Commands to be executed at the start of the main launch sequence (immediately after attaching to target). |
 | preResetCommands | string[] | Both | Additional GDB Commands to be executed at the start of the reset sequence. When undefined the deprecated preRestartCommands is used. |
 | riscvCsrFile | string | Both | Path to a RISC-V CSR register definition XML file (e.g. cpu_registers_riscv.xml). When set, enables the RISC-V CSR Registers panel. |
-| rtos | string | Both | RTOS being used. For JLink this can be Azure, ChibiOS, embOS, FreeRTOS, NuttX, Zephyr or the path to a custom JLink RTOS Plugin library. For OpenOCD this can be auto (recommended), FreeRTOS, ThreadX, chibios, Chromium-EC, eCos, embKernel, linux, mqx, nuttx, RIOT, uCOS-III, or Zephyr. |
+| rtos | string | Both | RTOS being used. For JLink this can be Azure, ChibiOS, embOS, FreeRTOS, NuttX, Zephyr or the path to a custom JLink RTOS Plugin library. For OpenOCD this can be auto (recommended), FreeRTOS, ThreadX, chibios, Chromium-EC, eCos, embKernel, linux, mqx, nuttx, RIOT, uCOS-III,LiteOS, or Zephyr. |
 | rttConfig | object | Both | SEGGER's Real Time Trace (RTT) and supported by JLink, OpenOCD and perhaps others in the future |
 | rttConfig<br>.address | string | Both | Address to start searching for the RTT control block. Use "auto" for Cortex-Debug to use the address from elf file |
 | rttConfig<br>.clearSearch | boolean | Both | When true, clears the search-string. Only applicable when address is "auto" |

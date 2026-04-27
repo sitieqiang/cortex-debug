@@ -27,9 +27,10 @@ const OPENOCD_VALID_RTOS: string[] = [
     'nuttx',
     'RIOT',
     'uCOS-III',
+    'LiteOS',
     'Zephyr'
 ];
-const JLINK_VALID_RTOS: string[] = ['Azure', 'ChibiOS', 'embOS', 'FreeRTOS', 'NuttX', 'Zephyr'];
+const JLINK_VALID_RTOS: string[] = ['Azure', 'ChibiOS', 'embOS', 'FreeRTOS', 'NuttX', 'LiteOS', 'Zephyr'];
 
 class CortexDebugAdapterDescriptorFactory implements vscode.DebugAdapterDescriptorFactory {
     createDebugAdapterDescriptor(

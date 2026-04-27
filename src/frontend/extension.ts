@@ -93,6 +93,7 @@ export class CortexDebugExtension {
             vscode.commands.registerCommand('cortex-debug.liveWatch.moveUp', this.moveUpLiveWatchExpr.bind(this)),
             vscode.commands.registerCommand('cortex-debug.liveWatch.moveDown', this.moveDownLiveWatchExpr.bind(this)),
             vscode.commands.registerCommand('cortex-debug.liveWatch.editValue', this.editLiveWatchValue.bind(this)),
+            vscode.commands.registerCommand('cortex-debug.liveWatch.forceRefresh', this.forceRefreshLiveWatch.bind(this)),
 
             vscode.commands.registerCommand('cortex-debug.watchpointWrite', (arg) => this.addWatchpoint(arg, 'write')),
             vscode.commands.registerCommand('cortex-debug.watchpointRead', (arg) => this.addWatchpoint(arg, 'read')),
@@ -981,6 +982,10 @@ export class CortexDebugExtension {
 
     private editLiveWatchValue(node: any) {
         this.liveWatchProvider.editValue(node);
+    }
+
+    private forceRefreshLiveWatch() {
+        this.liveWatchProvider.forceRefresh();
     }
 
     private breakpointsChanged(e: vscode.BreakpointsChangeEvent) {

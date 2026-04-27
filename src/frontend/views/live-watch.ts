@@ -505,6 +505,13 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
         }
     }
 
+    public forceRefresh(): void {
+        if (LiveWatchTreeProvider.session) {
+            this.killTimer();
+            this.refresh(LiveWatchTreeProvider.session, !this.isStopped);
+        }
+    }
+
     public getTreeItem(element: LiveVariableNode): TreeItem | Promise<TreeItem> {
         return element?.getTreeItem();
     }

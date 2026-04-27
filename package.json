@@ -478,6 +478,12 @@
             },
             {
                 "category": "Cortex-Debug",
+                "command": "cortex-debug.liveWatch.forceRefresh",
+                "title": "Force Refresh",
+                "icon": "$(refresh)"
+            },
+            {
+                "category": "Cortex-Debug",
                 "command": "cortex-debug.watchpointWrite",
                 "title": "Set Write Watchpoint"
             },
@@ -698,7 +704,7 @@
                             },
                             "rtos": {
                                 "default": null,
-                                "description": "RTOS being used. For JLink this can be Azure, ChibiOS, embOS, FreeRTOS, NuttX, Zephyr or the path to a custom JLink RTOS Plugin library. For OpenOCD this can be auto (recommended), FreeRTOS, ThreadX, chibios, Chromium-EC, eCos, embKernel, linux, mqx, nuttx, RIOT, uCOS-III, or Zephyr.",
+                                "description": "RTOS being used. For JLink this can be Azure, ChibiOS, embOS, FreeRTOS, NuttX, Zephyr or the path to a custom JLink RTOS Plugin library. For OpenOCD this can be auto (recommended), FreeRTOS, ThreadX, chibios, Chromium-EC, eCos, embKernel, linux, mqx, nuttx, RIOT, uCOS-III,LiteOS, or Zephyr.",
                                 "type": "string"
                             },
                             "armToolchainPath": {
@@ -1877,7 +1883,7 @@
                             },
                             "rtos": {
                                 "default": null,
-                                "description": "RTOS being used. For JLink this can be Azure, ChibiOS, embOS, FreeRTOS, NuttX, Zephyr or the path to a custom JLink RTOS Plugin library. For OpenOCD this can be auto (recommended), FreeRTOS, ThreadX, chibios, Chromium-EC, eCos, embKernel, linux, mqx, nuttx, RIOT, uCOS-III, or Zephyr.",
+                                "description": "RTOS being used. For JLink this can be Azure, ChibiOS, embOS, FreeRTOS, NuttX, Zephyr or the path to a custom JLink RTOS Plugin library. For OpenOCD this can be auto (recommended), FreeRTOS, ThreadX, chibios, Chromium-EC, eCos, embKernel, linux, mqx, nuttx, RIOT, uCOS-III,LiteOS, or Zephyr.",
                                 "type": "string"
                             },
                             "armToolchainPath": {
@@ -3168,6 +3174,11 @@
                     "group": "navigation"
                 },
                 {
+                    "command": "cortex-debug.liveWatch.forceRefresh",
+                    "when": "view == cortex-debug.liveWatch && inDebugMode && debugType == 'cortex-debug'",
+                    "group": "navigation"
+                },
+                {
                     "command": "cortex-debug.varHexModeTurnOn",
                     "when": "view == workbench.debug.variablesView && inDebugMode && debugType == 'cortex-debug' && debugState == stopped &&  cortex-debug:variableUseNaturalFormat",
                     "group": "navigation"
@@ -3244,21 +3255,26 @@
                     "id": "cortex-debug-panel",
                     "title": "CSR-REG",
                     "icon": "images/icon.png"
+                },
+                {
+                    "id": "cortex-debug-liveWatch-panel",
+                    "title": "Live Watch",
+                    "icon": "images/icon.png"
                 }
             ]
         },
         "views": {
-            "debug": [
-                {
-                    "id": "cortex-debug.liveWatch",
-                    "name": "Cortex Live Watch",
-                    "when": "debugType == cortex-debug"
-                }
-            ],
             "cortex-debug-panel": [
                 {
                     "id": "cortex-debug.riscvCsr",
                     "name": "CSR-REG",
+                    "when": "debugType == cortex-debug"
+                }
+            ],
+            "cortex-debug-liveWatch-panel": [
+                {
+                    "id": "cortex-debug.liveWatch",
+                    "name": "Cortex Live Watch",
                     "when": "debugType == cortex-debug"
                 }
             ]
