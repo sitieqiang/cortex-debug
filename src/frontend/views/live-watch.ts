@@ -252,6 +252,7 @@ export class LiveVariableNode extends BaseNode {
                         const p = new Promise<void>((resolve) => {
                             child.refreshChildren(resolve);
                         });
+                        promises.push(p);
                     }
                 }
                 Promise.allSettled(promises).finally(() => {
@@ -700,7 +701,7 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
                     // Write successful - refresh to show updated value
                     this.refresh(LiveWatchTreeProvider.session);
                     // fix bug patch must two refresh ui vaile will be true
-                    this.refresh(LiveWatchTreeProvider.session);
+                    // this.refresh(LiveWatchTreeProvider.session);
                 }
             } catch (err) {
                 vscode.window.showErrorMessage(`Failed to set value: ${err.toString()}`);
