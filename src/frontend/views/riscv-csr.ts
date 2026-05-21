@@ -392,7 +392,7 @@ export class RiscvCsrProvider implements TreeDataProvider<CsrNode> {
             return false;
         }
         try {
-            const result = await this.session.customRequest('write-csr', { addr: reg.def.address, value: newValue });
+            const result = await this.session.customRequest('write-csr', { addr: reg.def.address, name: reg.def.name, value: newValue });
             if (result && result.success) {
                 await this.readRegister(reg);
                 return true;

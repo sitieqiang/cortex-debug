@@ -157,6 +157,54 @@ function COMMAND_MAP(c: string): string {
     return c.startsWith('-') ? c.substring(1) : `interpreter-exec console "${c.replace(/"/g, '\\"')}"`;
 }
 
+const CSR_CAPTURE_STREAM_TYPES = ['console', 'target'];
+
+function escapeRegExp(str: string): string {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getSafeCsrName(name: any): string | undefined {
+    if (typeof name !== 'string') {
+        return undefined;
+    }
+    const trimmed = name.trim();
+    return /^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(trimmed) ? trimmed : undefined;
+}
+
+function parseCsrValueFromOutput(output: string, name?: string): string | undefined {
+    if (!output) {
+        return undefined;
+    }
+    if (name) {
+        const namedMatch = new RegExp(`(?:^|\\n)\\s*${escapeRegExp(name)}\\b[^\\n]*[:=]\\s*(0x[0-9a-fA-F]+)`, 'i').exec(output);
+        if (namedMatch) {
+            return namedMatch[1].toLowerCase();
+        }
+    }
+    const fallback = output.match(/0x[0-9a-fA-F]+/g);
+    return fallback && fallback.length > 0 ? fallback[fallback.length - 1].toLowerCase() : undefined;
+}
+
+function normalizeCsrWriteValue(value: any): string | undefined {
+    if (typeof value === 'number') {
+        if (!isFinite(value)) {
+            return undefined;
+        }
+        return '0x' + (value >>> 0).toString(16).toUpperCase();
+    }
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+    const trimmed = value.trim();
+    if (/^0x[0-9a-fA-F]+$/.test(trimmed)) {
+        return '0x' + BigInt(trimmed).toString(16).toUpperCase();
+    }
+    if (/^[0-9]+$/.test(trimmed)) {
+        return '0x' + BigInt(trimmed).toString(16).toUpperCase();
+    }
+    return undefined;
+}
+
 let dbgResumeStopCounter = 0;
 class CustomStoppedEvent extends Event implements DebugProtocol.Event {
     public readonly body!: {
@@ -1459,6 +1507,31 @@ export class GDBDebugSession extends LoggingDebugSession {
                 if (isBusy) { return retFunc(); }
                 const addr = args.addr;
                 const name = args.name;
+                const csrName = getSafeCsrName(name);
+
+                if (this.args.servertype === 'openocd') {
+                    if (!csrName) {
+                        response.body = { value: '0x????????' };
+                        this.sendResponse(response);
+                        break;
+                    }
+                    try {
+                        const node = await this.miDebugger.sendCommand(
+                            `interpreter-exec console "monitor reg ${csrName}"`,
+                            false,
+                            true,
+                            false,
+                            CSR_CAPTURE_STREAM_TYPES
+                        );
+                        response.body = { value: parseCsrValueFromOutput(node.output || '', csrName) || '0x????????' };
+                        this.sendResponse(response);
+                    } catch (error) {
+                        response.body = { value: '0x????????' };
+                        this.sendResponse(response);
+                    }
+                    break;
+                }
+
                 if (addr === undefined) {
                     response.body = { value: '0x0' };
                     this.sendResponse(response);
@@ -1473,19 +1546,10 @@ export class GDBDebugSession extends LoggingDebugSession {
                         false,          // suppressFailure
                         true,           // swallowStdout
                         false,          // forceNoDebug
-                        ['console', 'target']  // captureStreamTypes: J-Link returns CSR values via target stream (@)
+                        CSR_CAPTURE_STREAM_TYPES  // captureStreamTypes: J-Link returns CSR values via target stream (@)
                     );
                     const output = node.output || '';
-                    let value = '0x00000000';
-                    const match = output.match(/[=:]\s*(0x[0-9a-fA-F]+)/);
-                    if (match) {
-                        value = match[1].toLowerCase();
-                    } else {
-                        const fallback = output.match(/0x[0-9a-fA-F]+/g);
-                        if (fallback && fallback.length > 0) {
-                            value = fallback[fallback.length - 1].toLowerCase();
-                        }
-                    }
+                    const value = parseCsrValueFromOutput(output) || '0x00000000';
                     response.body = { value: value };
                     this.sendResponse(response);
                 } catch (error) {
@@ -1497,30 +1561,57 @@ export class GDBDebugSession extends LoggingDebugSession {
             case 'write-csr': {
                 if (isBusy) { return retFunc(); }
                 const addr = args.addr;
+                const name = args.name;
                 const value = args.value;
-                if (addr === undefined || value === undefined) {
-                    response.body = { success: false, message: 'Missing address or value' };
+                if (value === undefined) {
+                    response.body = { success: false, message: 'Missing value' };
+                    this.sendResponse(response);
+                    break;
+                }
+                const hexValue = normalizeCsrWriteValue(value);
+                if (!hexValue) {
+                    response.body = { success: false, message: 'Invalid CSR value. Use hexadecimal or decimal.' };
+                    this.sendResponse(response);
+                    break;
+                }
+
+                if (this.args.servertype === 'openocd') {
+                    const csrName = getSafeCsrName(name);
+                    if (!csrName) {
+                        response.body = { success: false, message: 'Missing or invalid CSR register name' };
+                        this.sendResponse(response);
+                        break;
+                    }
+                    try {
+                        const node = await this.miDebugger.sendCommand(
+                            `interpreter-exec console "monitor reg ${csrName} ${hexValue}"`,
+                            false,
+                            true,
+                            false,
+                            CSR_CAPTURE_STREAM_TYPES
+                        );
+                        response.body = { success: true, output: (node.output || '').trim() };
+                        this.sendResponse(response);
+                    } catch (error) {
+                        response.body = { success: false, message: error.toString() };
+                        this.sendResponse(response);
+                    }
+                    break;
+                }
+
+                if (addr === undefined) {
+                    response.body = { success: false, message: 'Missing address' };
                     this.sendResponse(response);
                     break;
                 }
                 const hexAddr = '0x' + (addr >>> 0).toString(16).toUpperCase();
-                let hexValue = value;
-                if (typeof value === 'number') {
-                    hexValue = '0x' + (value >>> 0).toString(16).toUpperCase();
-                } else if (typeof value === 'string' && !value.trim().toLowerCase().startsWith('0x')) {
-                    // Assume decimal string, convert to hex
-                    const num = parseInt(value.trim(), 10);
-                    if (!isNaN(num)) {
-                        hexValue = '0x' + (num >>> 0).toString(16).toUpperCase();
-                    }
-                }
                 try {
                     const node = await this.miDebugger.sendCommand(
                         `interpreter-exec console "monitor writecsr ${hexAddr} ${hexValue}"`,
                         false,          // suppressFailure
                         true,           // swallowStdout
                         false,          // forceNoDebug
-                        ['console', 'target']  // captureStreamTypes: J-Link returns CSR results via target stream (@)
+                        CSR_CAPTURE_STREAM_TYPES  // captureStreamTypes: J-Link returns CSR results via target stream (@)
                     );
                     const output = node.output || '';
                     // JLink writecsr usually outputs nothing or "OK" on success
