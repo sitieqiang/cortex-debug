@@ -484,28 +484,28 @@ export class LiveWatchMonitor {
         try {
             const name = args.name;
             const value = args.value;
-            const expr = args.expr;
+            const expr = args.expr || name;
+            const monitorExpr = this.normalizeMonitorExpression(expr);
             const address = args.address;  // Variable address for direct memory write
             const type = args.type;        // Variable type for determining size
             let bitfieldInfo;  // Bitfield information
 
-            // Check if we should use J-Link monitor commands for direct memory write
-            // This avoids triggering watchpoints/SIGTRAP
-            const useMonitorWrite = this.shouldUseMonitorWrite() && address && type;
-
-            if (useMonitorWrite) {
+            if (this.shouldUseMonitorWrite() && monitorExpr) {
                 // Dynamically check if this is a bitfield and get its info
-                if (expr) {
-                    const dynamicBitfieldInfo = await this.getBitfieldInfoForExpr(expr);
-                    if (dynamicBitfieldInfo) {
-                        bitfieldInfo = dynamicBitfieldInfo;
-                        // this.mainSession.handleMsg('stdout',
-                        //     `DebugLiveWatch: [setVariableRequest] Dynamic bitfield info: ${JSON.stringify(bitfieldInfo)}\n`);
-                    }
+                const dynamicBitfieldInfo = await this.getBitfieldInfoForExpr(monitorExpr);
+                if (dynamicBitfieldInfo) {
+                    bitfieldInfo = dynamicBitfieldInfo;
+                    // this.mainSession.handleMsg('stdout',
+                    //     `DebugLiveWatch: [setVariableRequest] Dynamic bitfield info: ${JSON.stringify(bitfieldInfo)}\n`);
                 }
 
-                // Use J-Link monitor commands to write directly to memory
-                await this.writeViaMonitor(address, value, type, expr, bitfieldInfo);
+                // Use monitor commands to write directly to memory
+                const monitorAddress = await this.resolveMonitorWriteAddress(address, monitorExpr, bitfieldInfo);
+                if (!monitorAddress) {
+                    throw new Error(`Cannot resolve memory address for monitor write: ${monitorExpr}`);
+                }
+                const monitorType = await this.resolveMonitorWriteType(type, monitorExpr);
+                await this.writeViaMonitor(monitorAddress, value, monitorType, monitorExpr, bitfieldInfo);
                 response.body = { value: value };
                 response.success = true;
                 this.mainSession.sendResponse(response);
@@ -562,11 +562,168 @@ export class LiveWatchMonitor {
     }
 
     /**
-     * Check if we should use J-Link monitor commands for memory write
+     * Check if we should use monitor commands for direct memory write.
      */
+    private getMonitorWriteKind(): 'jlink' | 'openocd' | undefined {
+        const servertype = (this.mainSession.args.servertype || '').toLowerCase();
+        if (servertype === 'jlink') {
+            return 'jlink';
+        }
+        if (servertype === 'openocd') {
+            return 'openocd';
+        }
+
+        // External sessions are commonly used to connect to an already-running OpenOCD.
+        // Prefer OpenOCD's mwb/mwh/mww commands so Live Watch writes still avoid GDB assignment.
+        if (servertype === 'external') {
+            return 'openocd';
+        }
+
+        return undefined;
+    }
+
     private shouldUseMonitorWrite(): boolean {
-        // Check if the servertype is jlink
-        return this.mainSession.args.servertype === 'jlink';
+        return this.getMonitorWriteKind() !== undefined;
+    }
+
+    private normalizeMonitorExpression(expr: any): string {
+        if (typeof expr !== 'string') {
+            return '';
+        }
+        let ret = expr.trim();
+        if (/,[bdhonx]$/i.test(ret)) {
+            ret = ret.substring(0, ret.length - 2).trim();
+        }
+        return ret;
+    }
+
+    private normalizeMonitorAddress(address: any): string {
+        if (typeof address !== 'string') {
+            return '';
+        }
+        const trimmed = address.trim();
+        const spaceIndex = trimmed.indexOf(' ');
+        const addressOnly = spaceIndex === -1 ? trimmed : trimmed.substring(0, spaceIndex);
+        return /^0x[0-9a-f]+$/i.test(addressOnly) ? addressOnly : '';
+    }
+
+    private addAddressOffset(address: string, offset = 0): string {
+        if (!offset) {
+            return address;
+        }
+        return '0x' + (parseInt(address, 16) + offset).toString(16).toLowerCase();
+    }
+
+    private alignAddressDown(address: string, size?: number): string {
+        if (!size || size <= 1) {
+            return address;
+        }
+        const addr = parseInt(address, 16);
+        return '0x' + (addr - (addr % size)).toString(16).toLowerCase();
+    }
+
+    private async resolveMonitorWriteAddress(address: any, expr: string, bitfieldInfo?: BitfieldInfo): Promise<string> {
+        if (!expr) {
+            return '';
+        }
+
+        if (bitfieldInfo?.isBitfield) {
+            const bitfieldAddress = await this.resolveBitfieldContainerAddress(address, expr, bitfieldInfo);
+            return bitfieldAddress;
+        }
+
+        const directAddress = this.normalizeMonitorAddress(address);
+        if (directAddress) {
+            return directAddress;
+        }
+
+        try {
+            const addrResp = await this.miDebugger.sendCommand(`data-evaluate-expression "&(${expr})"`);
+            return this.normalizeMonitorAddress(addrResp.result('value'));
+        } catch (e) {
+            return '';
+        }
+    }
+
+    private async resolveBitfieldContainerAddress(address: any, expr: string, bitfieldInfo: BitfieldInfo): Promise<string> {
+        const parentAddressExpr = this.getBitfieldParentAddressExpression(expr);
+        if (parentAddressExpr) {
+            try {
+                const addrResp = await this.miDebugger.sendCommand(`data-evaluate-expression "${parentAddressExpr}"`);
+                const parentAddress = this.normalizeMonitorAddress(addrResp.result('value'));
+                if (parentAddress) {
+                    return this.addAddressOffset(parentAddress, bitfieldInfo.containerOffset || 0);
+                }
+            } catch (e) {
+                // Fall back to the provided address below. GDB cannot take a real address of a bitfield.
+            }
+        }
+
+        const directAddress = this.normalizeMonitorAddress(address);
+        return directAddress ? this.alignAddressDown(directAddress, bitfieldInfo.containerSize) : '';
+    }
+
+    private getBitfieldParentAddressExpression(expr: string): string {
+        const dotIndex = expr.lastIndexOf('.');
+        const arrowIndex = expr.lastIndexOf('->');
+        const separatorIndex = Math.max(dotIndex, arrowIndex);
+
+        if (separatorIndex === -1) {
+            return '';
+        }
+
+        const parentExpr = expr.substring(0, separatorIndex);
+        if (arrowIndex > dotIndex) {
+            return `(${parentExpr})`;
+        }
+        return `&(${parentExpr})`;
+    }
+
+    private async resolveMonitorWriteType(type: any, expr: string): Promise<string> {
+        if (typeof type === 'string' && type.trim()) {
+            return type;
+        }
+
+        try {
+            const escapedExpr = expr.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            const result = await this.miDebugger.sendCommand(`interpreter-exec console "whatis ${escapedExpr}"`, false, true);
+            const match = /type\s*=\s*([^\r\n]+)/.exec(result.output || '');
+            return match ? match[1].trim() : '';
+        } catch (e) {
+            return '';
+        }
+    }
+
+    private getMonitorWriteCommand(size: number): string {
+        const writeSize = size === 1 || size === 2 ? size : 4;
+
+        if (this.getMonitorWriteKind() === 'openocd') {
+            if (writeSize === 1) {
+                return 'mwb';
+            }
+            if (writeSize === 2) {
+                return 'mwh';
+            }
+            return 'mww';
+        }
+
+        if (writeSize === 1) {
+            return 'memU8';
+        }
+        if (writeSize === 2) {
+            return 'memU16';
+        }
+        return 'memU32';
+    }
+
+    private async writeMemoryViaMonitor(size: number, address: string, value: number | bigint): Promise<void> {
+        const monitorCmd = this.getMonitorWriteCommand(size);
+        const writeSize = size === 1 || size === 2 ? size : 4;
+        const rawValue = typeof value === 'bigint' ? value : BigInt(value >>> 0);
+        const mask = (BigInt(1) << BigInt(writeSize * 8)) - BigInt(1);
+        const hexValue = (rawValue & mask).toString(16).toLowerCase();
+        const cmd = `monitor ${monitorCmd} ${address} 0x${hexValue}`;
+        await this.miDebugger.sendCommand(`interpreter-exec console "${cmd}"`);
     }
 
     /**
@@ -614,6 +771,8 @@ export class LiveWatchMonitor {
                         isBitfield: true,
                         bitOffset: memberInfo.bitOffset || 0,
                         bitWidth: memberInfo.bitWidth,
+                        containerOffset: memberInfo.containerOffset || 0,
+                        containerSize: memberInfo.containerSize,
                         memberPath: expr
                     };
                 } else {
@@ -631,8 +790,8 @@ export class LiveWatchMonitor {
     }
 
     /**
-     * Write to memory using GDB MI commands via Live GDB session
-     * This avoids triggering watchpoints/SIGTRAP
+     * Write to memory using GDB monitor commands via Live GDB session.
+     * This avoids triggering watchpoints/SIGTRAP and keeps the target running.
      * @param address Memory address
      * @param value Value to write
      * @param type Variable type
@@ -653,9 +812,14 @@ export class LiveWatchMonitor {
         const isFloat = lowerType.includes('float') && !lowerType.includes('double');
         const isDouble = lowerType.includes('double');
 
-        // Get size via GDB sizeof
-        const sizeResult = await this.miDebugger.sendCommand(`data-evaluate-expression "sizeof(${expr})"`);
-        const size = parseInt(sizeResult.result('value'));
+        let size = bitfieldInfo?.containerSize || 0;
+        if (!size) {
+            const sizeResult = await this.miDebugger.sendCommand(`data-evaluate-expression "sizeof(${expr})"`);
+            size = parseInt(sizeResult.result('value'));
+        }
+        if (!size || isNaN(size)) {
+            throw new Error(`Cannot resolve write size for monitor write: ${expr}`);
+        }
 
         // Handle bitfield - need read-modify-write (bitfields can't be float)
         if (bitfieldInfo && bitfieldInfo.isBitfield && bitfieldInfo.bitOffset !== undefined && bitfieldInfo.bitWidth !== undefined) {
@@ -673,15 +837,12 @@ export class LiveWatchMonitor {
             if (isNaN(floatVal)) { throw new Error(`Invalid float value: ${value}`); }
             const buf = new ArrayBuffer(4);
             new DataView(buf).setFloat32(0, floatVal, true); // little-endian
-            const hexValue = new DataView(buf).getUint32(0, true).toString(16).toLowerCase();
-            const cmd = `monitor memU32 ${address} 0x${hexValue}`;
-            // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write float] cmd='${cmd}'\n`);
-            await this.miDebugger.sendCommand(`interpreter-exec console "${cmd}"`);
+            await this.writeMemoryViaMonitor(4, address, new DataView(buf).getUint32(0, true));
             return;
         }
 
         if (isDouble) {
-            // float64: IEEE 754 double precision, write as two memU32 (little-endian)
+            // float64: IEEE 754 double precision, write as two 32-bit words (little-endian)
             const doubleVal = parseFloat(value);
             if (isNaN(doubleVal)) { throw new Error(`Invalid double value: ${value}`); }
             const buf = new ArrayBuffer(8);
@@ -689,14 +850,10 @@ export class LiveWatchMonitor {
             const low32 = new DataView(buf).getUint32(0, true);
             const high32 = new DataView(buf).getUint32(4, true);
 
-            const cmdLow = `monitor memU32 ${address} 0x${low32.toString(16).toLowerCase()}`;
-            // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write double low] cmd='${cmdLow}'\n`);
-            await this.miDebugger.sendCommand(`interpreter-exec console "${cmdLow}"`);
+            await this.writeMemoryViaMonitor(4, address, low32);
 
             const addrHigh = '0x' + (parseInt(address, 16) + 4).toString(16).toLowerCase();
-            const cmdHigh = `monitor memU32 ${addrHigh} 0x${high32.toString(16).toLowerCase()}`;
-            // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write double high] cmd='${cmdHigh}'\n`);
-            await this.miDebugger.sendCommand(`interpreter-exec console "${cmdHigh}"`);
+            await this.writeMemoryViaMonitor(4, addrHigh, high32);
             return;
         }
 
@@ -718,26 +875,13 @@ export class LiveWatchMonitor {
 
         const MASK32 = BigInt('0xFFFFFFFF');
         const low32 = Number(bigValue & MASK32) >>> 0;
-        const hexValue = low32.toString(16).toLowerCase();
 
-        let monitorCmd = 'memU32';
-        if (size === 1) {
-            monitorCmd = 'memU8';
-        } else if (size === 2) {
-            monitorCmd = 'memU16';
-        }
-
-        const cmd = `monitor ${monitorCmd} ${address} 0x${hexValue}`;
-        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write] cmd='${cmd}'\n`);
-        await this.miDebugger.sendCommand(`interpreter-exec console "${cmd}"`);
+        await this.writeMemoryViaMonitor(size, address, low32);
 
         if (size === 8) {
             const addrHigh = '0x' + (parseInt(address, 16) + 4).toString(16).toLowerCase();
             const high32 = Number((bigValue >> BigInt(32)) & MASK32) >>> 0;
-            const highHexValue = high32.toString(16).toLowerCase();
-            const writeCmd = `monitor memU32 ${addrHigh} 0x${highHexValue}`;
-            // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [direct write 64-bit high] Writing: ${writeCmd}\n`);
-            await this.miDebugger.sendCommand(`interpreter-exec console "${writeCmd}"`);
+            await this.writeMemoryViaMonitor(4, addrHigh, high32);
         }
     }
 
@@ -753,14 +897,6 @@ export class LiveWatchMonitor {
 
         // this.mainSession.handleMsg('stdout',
         //     `DebugLiveWatch: [writeBitfield] addr=${address}, offset=${bitOffset}, width=${bitWidth}, value=${newValue}, containerSize=${containerSize}\n`);
-
-        // Step 1: Read current value from memory
-        let monitorCmd = 'memU32';
-        if (containerSize === 1) {
-            monitorCmd = 'memU8';
-        } else if (containerSize === 2) {
-            monitorCmd = 'memU16';
-        }
 
         // Send read command using GDB MI data-read-memory
         const readCmd = `data-read-memory-bytes ${address} ${containerSize}`;
@@ -798,18 +934,12 @@ export class LiveWatchMonitor {
 
         const lowNewValueContainer = (newValueContainer >>> 0) & 0xFFFFFFFF;
         // Step 3: Write back the modified value
-        const hexValue = (lowNewValueContainer >>> 0).toString(16).toLowerCase();
-        const writeCmd = `monitor ${monitorCmd} ${address} 0x${hexValue}`;
-        // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield] Writing: ${writeCmd}\n`);
-        await this.miDebugger.sendCommand(`interpreter-exec console "${writeCmd}"`);
+        await this.writeMemoryViaMonitor(containerSize, address, lowNewValueContainer);
         if (containerSize === 8) {
             const addrNum = parseInt(address, 16) + 4;
             const highAddr = '0x' + addrNum.toString(16).toLowerCase();
             const highNewValueContainer = (Math.floor(newValueContainer / 0x100000000) & 0xFFFFFFFF >>> 0);
-            const highHexValue = (highNewValueContainer >>> 0).toString(16).toLowerCase();
-            const highWriteCmd = `monitor memU32 ${highAddr} 0x${highHexValue}`;
-            // this.mainSession.handleMsg('stdout', `DebugLiveWatch: [writeBitfield 64-bit high] Writing: ${highWriteCmd}\n`);
-            await this.miDebugger.sendCommand(`interpreter-exec console "${highWriteCmd}"`);
+            await this.writeMemoryViaMonitor(4, highAddr, highNewValueContainer);
         }
     }
 

@@ -12,6 +12,7 @@ export interface BitfieldInfo {
     bitOffset?: number;         // bit offset within the container (0-31 for 32-bit)
     bitWidth?: number;          // width in bits (1-32)
     containerOffset?: number;   // byte offset of the container from struct start
+    containerSize?: number;     // size of the container in bytes
     memberPath?: string;        // full path to this member (e.g., "struct.member")
 }
 

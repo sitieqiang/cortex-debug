@@ -1256,7 +1256,8 @@ export class MI2 extends EventEmitter implements IBackend {
                 const bitOffsetInByte = parseInt(m[2]);
                 const containerSize = parseInt(m[3]);
                 const bitWidth = parseInt(m[5]);
-                const bitOffset = byteOffset * 8 + bitOffsetInByte;
+                const containerOffset = byteOffset - (byteOffset % containerSize);
+                const bitOffset = ((byteOffset - containerOffset) * 8) + bitOffsetInByte;
 
                 // this.log('log',
                 //     `DebugLiveWatch: [parsePtypeOutput] Found ${typeName}: bitOffset=${bitOffset}, bitWidth=${bitWidth}, containerSize=${containerSize}\n`);
@@ -1264,7 +1265,9 @@ export class MI2 extends EventEmitter implements IBackend {
                 return {
                     name: typeName,
                     bitOffset: bitOffset,
-                    bitWidth: bitWidth
+                    bitWidth: bitWidth,
+                    containerOffset: containerOffset,
+                    containerSize: containerSize
                 };
             }
         }
@@ -1289,6 +1292,8 @@ export interface StructMemberInfo {
     name: string;
     bitOffset?: number;    // bit offset within container
     bitWidth?: number;     // width in bits
+    containerOffset?: number;   // byte offset of the container from struct start
+    containerSize?: number;     // size of the container in bytes
 }
 
 /*
