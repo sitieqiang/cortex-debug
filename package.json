@@ -28,7 +28,7 @@
                         "maximum": 5000
                     },
                     "cortex-debug.liveWatchMaxVisibleChildren": {
-                        "default": 128,
+                        "default": 64,
                         "description": "Maximum number of children displayed for each expanded Live Watch variable. Larger structures are browsed with Load previous/Load more entries.",
                         "type": "number",
                         "multipleOf": 1,
@@ -36,7 +36,7 @@
                         "maximum": 4096
                     },
                     "cortex-debug.liveWatchPageSize": {
-                        "default": 64,
+                        "default": 32,
                         "description": "Number of children to move when browsing a large expanded Live Watch variable with Load previous/Load more. Values larger than liveWatchMaxVisibleChildren are capped at that maximum.",
                         "type": "number",
                         "multipleOf": 1,
@@ -913,7 +913,7 @@
                                         "maximum": 20
                                     },
                                     "liveWatchMaxVisibleChildren": {
-                                        "default": 128,
+                                        "default": 64,
                                         "description": "Maximum number of children displayed for each expanded Live Watch variable in this debug configuration. Overrides cortex-debug.liveWatchMaxVisibleChildren.",
                                         "type": "number",
                                         "multipleOf": 1,
@@ -921,7 +921,7 @@
                                         "maximum": 4096
                                     },
                                     "liveWatchPageSize": {
-                                        "default": 64,
+                                        "default": 32,
                                         "description": "Number of children to move when browsing a large expanded Live Watch variable in this debug configuration. Overrides cortex-debug.liveWatchPageSize and is capped at liveWatchMaxVisibleChildren.",
                                         "type": "number",
                                         "multipleOf": 1,
@@ -2120,7 +2120,7 @@
                                         "maximum": 20
                                     },
                                     "liveWatchMaxVisibleChildren": {
-                                        "default": 128,
+                                        "default": 64,
                                         "description": "Maximum number of children displayed for each expanded Live Watch variable in this debug configuration. Overrides cortex-debug.liveWatchMaxVisibleChildren.",
                                         "type": "number",
                                         "multipleOf": 1,
@@ -2128,7 +2128,7 @@
                                         "maximum": 4096
                                     },
                                     "liveWatchPageSize": {
-                                        "default": 64,
+                                        "default": 32,
                                         "description": "Number of children to move when browsing a large expanded Live Watch variable in this debug configuration. Overrides cortex-debug.liveWatchPageSize and is capped at liveWatchMaxVisibleChildren.",
                                         "type": "number",
                                         "multipleOf": 1,

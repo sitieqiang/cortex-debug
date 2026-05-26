@@ -37,8 +37,8 @@ interface LiveWatchSearchResult {
 }
 
 export class LiveVariableNode extends BaseNode {
-    private static readonly defaultMaxVisibleChildren = 128;
-    private static readonly defaultPageSize = 64;
+    private static readonly defaultMaxVisibleChildren = 64;
+    private static readonly defaultPageSize = 32;
     private static maxVisibleChildren = LiveVariableNode.defaultMaxVisibleChildren;
     private static pageSize = LiveVariableNode.defaultPageSize;
     protected session: vscode.DebugSession | undefined;        // This is transient
@@ -826,8 +826,8 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
         this.currentRefreshRate = rate;
     }
 
-    private static defaultMaxVisibleChildren = 128;
-    private static defaultPageSize = 64;
+    private static defaultMaxVisibleChildren = 64;
+    private static defaultPageSize = 32;
     private setPagingSettings(liveWatch?: LiveWatchConfig) {
         const config = vscode.workspace.getConfiguration('cortex-debug', null);
         let maxVisible = config.get('liveWatchMaxVisibleChildren', LiveWatchTreeProvider.defaultMaxVisibleChildren);
