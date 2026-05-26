@@ -478,10 +478,10 @@ export class LiveVariableNode extends BaseNode {
         });
     }
 
-    public async searchChildren(): Promise<void> {
+    public async searchChildren(): Promise<LiveVariableNode | undefined> {
         if (!LiveWatchTreeProvider.session || this.session !== LiveWatchTreeProvider.session || this.variablesReference <= 0) {
             vscode.window.showInformationMessage('Live Watch: selected item has no searchable children');
-            return;
+            return undefined;
         }
 
         interface LiveWatchSearchQuickPickItem extends vscode.QuickPickItem {
@@ -624,7 +624,7 @@ export class LiveVariableNode extends BaseNode {
             clearTimeout(searchTimer);
         }
         if (!selected) {
-            return;
+            return undefined;
         }
 
         const before = this.childStart;
@@ -636,6 +636,9 @@ export class LiveVariableNode extends BaseNode {
             + ` displayIndex=${selected.match.displayIndex} directIndex=${selected.match.directIndex}`
             + ` startBefore=${before} startAfter=${this.childStart}`);
         await new Promise<void>((resolve) => this.refreshChildren(resolve));
+        return this.children?.find((child) => child.name === selected.match.name)
+            ?? this.children?.find((child) => child.getExpr() === selected.match.name)
+            ?? this;
     }
 
     public collectActiveItems(variableReferences: Set<number>, expressions: Set<string>): void {
@@ -907,6 +910,10 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
         return element ? element.getChildren() : this.variables.getChildren();
     }
 
+    public getParent(element: LiveVariableNode): ProviderResult<LiveVariableNode> {
+        return element?.getParent() as LiveVariableNode | undefined;
+    }
+
     private startTimer(subtract: number = 0) {
         // console.error('Starting Timer');
         if (!this.visible) {
@@ -1141,12 +1148,13 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
         }
     }
 
-    public searchChildren(element: LiveVariableNode) {
+    public async searchChildren(element: LiveVariableNode): Promise<LiveVariableNode | undefined> {
         if (element) {
-            element.searchChildren().then(() => {
-                this.fire();
-            });
+            const revealNode = await element.searchChildren();
+            this.fire();
+            return revealNode;
         }
+        return undefined;
     }
 
     private pendingFires = 0;

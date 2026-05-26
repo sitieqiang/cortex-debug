@@ -999,8 +999,11 @@ export class CortexDebugExtension {
         this.liveWatchProvider.loadPreviousChildren(node);
     }
 
-    private searchLiveWatchChildren(node: any) {
-        this.liveWatchProvider.searchChildren(node);
+    private async searchLiveWatchChildren(node: any) {
+        const revealNode = await this.liveWatchProvider.searchChildren(node);
+        if (revealNode) {
+            await this.liveWatchTreeView.reveal(revealNode, { select: true, focus: true });
+        }
     }
 
     private forceRefreshLiveWatch() {
