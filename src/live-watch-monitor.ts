@@ -36,6 +36,7 @@ export class VariablesHandler {
     }
 
     public async clearCachedVars(miDebugger: MI2) {
+        miDebugger.clearLiveWatchSearchIndexes();
         if (this.cachedChangeList) {
             const poromises = [];
             for (const name of Object.keys(this.cachedChangeList)) {
@@ -488,8 +489,9 @@ export class VariablesHandler {
         miDebugger: MI2, session: GDBDebugSession): Promise<void> {
         const ref = args?.variablesReference;
         const query = (args?.query ?? '').toString();
+        const buildIndex = !!args?.buildIndex;
         response.body = { matches: [], truncated: false, scanned: 0 };
-        if (!ref || !query) {
+        if (!ref || (!query && !buildIndex)) {
             session.sendResponse(response);
             return;
         }
@@ -503,18 +505,20 @@ export class VariablesHandler {
         try {
             this.pagingLog(session, `searchChildrenRequest parentExp=${id.exp} parentName=${id.name}`
                 + ` ref=${ref} query="${query}" maxResults=${args?.maxResults ?? '<none>'}`
-                + ` windowSize=${args?.windowSize ?? '<none>'} totalChildren=${id.numchild}`);
+                + ` windowSize=${args?.windowSize ?? '<none>'} totalChildren=${id.numchild}`
+                + ` buildIndex=${buildIndex}`);
             const result = await miDebugger.varSearchChildren(
                 ref,
                 id.name,
                 query,
                 args?.maxResults ?? 100,
                 args?.windowSize ?? 128,
-                id.numchild);
+                id.numchild,
+                buildIndex);
             response.body = result;
             this.pagingLog(session, `searchChildrenResponse parentExp=${id.exp} ref=${ref}`
                 + ` query="${query}" matches=${result.matches.length} scanned=${result.scanned}`
-                + ` truncated=${result.truncated}`
+                + ` indexed=${result.indexed} cacheHit=${result.cacheHit} truncated=${result.truncated}`
                 + ` first=${result.matches[0]?.name ?? '<none>'}/${result.matches[0]?.suggestedStart ?? '<none>'}`);
             session.sendResponse(response);
         } catch (err) {

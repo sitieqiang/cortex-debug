@@ -27,6 +27,11 @@ export interface LiveWatchSearchMatch {
     suggestedStart: number;
 }
 
+interface LiveWatchSearchIndex {
+    entries: LiveWatchSearchMatch[];
+    scanned: number;
+}
+
 export function parseReadMemResults(node: MINode): ReadMemResults {
     const startAddress = node.resultRecords.results[0][1][0][0][1];
     const endAddress = node.resultRecords.results[0][1][0][2][1];
@@ -60,6 +65,7 @@ export class MI2 extends EventEmitter implements IBackend {
     public debugOutput: ADAPTER_DEBUG_MODE = ADAPTER_DEBUG_MODE.NONE;
     public interruptMode: GDBInterruptMode = GDBInterruptMode.EXEC_INTERRUPT;
     public procEnv: any;
+    private liveWatchSearchIndexes = new Map<string, LiveWatchSearchIndex>();
     protected currentToken: number = 1;
     protected nextTokenComing = 1;          // This will be the next token output from gdb
     protected handlers: { [index: number]: (info: MINode) => any } = {};
@@ -1143,23 +1149,26 @@ export class MI2 extends EventEmitter implements IBackend {
         return ret;
     }
 
-    public async varSearchChildren(
+    public clearLiveWatchSearchIndexes(): void {
+        this.liveWatchSearchIndexes.clear();
+    }
+
+    private getLiveWatchSearchIndexKey(name: string, windowSize: number, totalChildren?: number): string {
+        return `${name}|${windowSize}|${Number.isFinite(totalChildren) ? totalChildren : '<unknown>'}`;
+    }
+
+    private async buildLiveWatchSearchIndex(
         parent: number,
         name: string,
-        query: string,
-        maxResults: number,
         windowSize: number,
-        totalChildren?: number): Promise<{ matches: LiveWatchSearchMatch[]; truncated: boolean; scanned: number }> {
-        const normalizedQuery = query.toLowerCase();
-        const resultLimit = Math.max(1, Math.floor(maxResults || 100));
+        totalChildren?: number): Promise<LiveWatchSearchIndex> {
         const displayWindow = Math.max(1, Math.floor(windowSize || 128));
         const directPageSize = 64;
         const keywords = ['private', 'protected', 'public'];
         const directDisplayStarts: number[] = [];
-        const matches: LiveWatchSearchMatch[] = [];
+        const entries: LiveWatchSearchMatch[] = [];
         let displayIndex = 0;
         let directIndex = 0;
-        let truncated = false;
 
         const isSyntheticChild = (child: VariableObject) => {
             return child.exp.startsWith('<anonymous ') || keywords.includes(child.exp);
@@ -1195,7 +1204,7 @@ export class MI2 extends EventEmitter implements IBackend {
         };
 
         const finiteTotal = Number.isFinite(totalChildren) ? totalChildren : Number.POSITIVE_INFINITY;
-        while (directIndex < finiteTotal && matches.length < resultLimit) {
+        while (directIndex < finiteTotal) {
             const count = Math.min(directPageSize, finiteTotal - directIndex);
             const directChildren = await this.varListChildrenNoValues(parent, name, directIndex, count);
             if (!directChildren.length) {
@@ -1207,24 +1216,18 @@ export class MI2 extends EventEmitter implements IBackend {
                 const visibleChildren = await flattenVisibleChildren(directChild);
                 for (const visibleChild of visibleChildren) {
                     const childName = visibleChild.exp || visibleChild.name;
-                    if (childName.toLowerCase().includes(normalizedQuery)) {
-                        matches.push({
-                            name: childName,
-                            type: visibleChild.type || '',
-                            parent: isSyntheticChild(directChild) ? (directChild.exp || directChild.name) : '',
-                            directIndex,
-                            displayIndex,
-                            suggestedStart: getSuggestedStart(displayIndex)
-                        });
-                        if (matches.length >= resultLimit) {
-                            truncated = true;
-                            break;
-                        }
-                    }
+                    entries.push({
+                        name: childName,
+                        type: visibleChild.type || '',
+                        parent: isSyntheticChild(directChild) ? (directChild.exp || directChild.name) : '',
+                        directIndex,
+                        displayIndex,
+                        suggestedStart: getSuggestedStart(displayIndex)
+                    });
                     displayIndex++;
                 }
                 directIndex++;
-                if (matches.length >= resultLimit || directIndex >= finiteTotal) {
+                if (directIndex >= finiteTotal) {
                     break;
                 }
             }
@@ -1234,10 +1237,57 @@ export class MI2 extends EventEmitter implements IBackend {
             }
         }
 
+        return { entries, scanned: displayIndex };
+    }
+
+    public async varSearchChildren(
+        parent: number,
+        name: string,
+        query: string,
+        maxResults: number,
+        windowSize: number,
+        totalChildren?: number,
+        buildIndex = false): Promise<{ matches: LiveWatchSearchMatch[]; truncated: boolean; scanned: number; indexed: number; cacheHit: boolean }> {
+        const normalizedQuery = query.toLowerCase();
+        const resultLimit = Math.max(1, Math.floor(maxResults || 100));
+        const displayWindow = Math.max(1, Math.floor(windowSize || 128));
+        const cacheKey = this.getLiveWatchSearchIndexKey(name, displayWindow, totalChildren);
+        let searchIndex = this.liveWatchSearchIndexes.get(cacheKey);
+        const cacheHit = !!searchIndex;
+        if (!searchIndex) {
+            searchIndex = await this.buildLiveWatchSearchIndex(parent, name, displayWindow, totalChildren);
+            this.liveWatchSearchIndexes.set(cacheKey, searchIndex);
+        }
+
+        if (buildIndex && !normalizedQuery) {
+            return {
+                matches: searchIndex.entries,
+                truncated: false,
+                scanned: searchIndex.scanned,
+                indexed: searchIndex.entries.length,
+                cacheHit
+            };
+        }
+
+        const matches: LiveWatchSearchMatch[] = [];
+        let truncated = false;
+        for (const entry of searchIndex.entries) {
+            if (entry.name.toLowerCase().includes(normalizedQuery)) {
+                if (matches.length < resultLimit) {
+                    matches.push(entry);
+                } else {
+                    truncated = true;
+                    break;
+                }
+            }
+        }
+
         return {
             matches,
             truncated,
-            scanned: displayIndex
+            scanned: searchIndex.scanned,
+            indexed: searchIndex.entries.length,
+            cacheHit
         };
     }
 

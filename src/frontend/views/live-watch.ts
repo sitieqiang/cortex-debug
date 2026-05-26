@@ -11,6 +11,8 @@ interface SaveVarState {
     children: LiveVariableNode[] | undefined;
     childStart: number;
     hasMoreChildren: boolean;
+    searchIndex: LiveWatchSearchMatch[] | undefined;
+    searchIndexReference: number;
 }
 
 interface SaveVarStateMap {
@@ -30,6 +32,8 @@ interface LiveWatchSearchResult {
     matches: LiveWatchSearchMatch[];
     truncated?: boolean;
     scanned?: number;
+    indexed?: number;
+    cacheHit?: boolean;
 }
 
 export class LiveVariableNode extends BaseNode {
@@ -44,6 +48,8 @@ export class LiveVariableNode extends BaseNode {
     private childStart = 0;
     private hasMoreChildren = false;
     private forwardPagingDisabled = false;
+    private searchIndex: LiveWatchSearchMatch[] | undefined;
+    private searchIndexReference = 0;
     constructor(
         parent: LiveVariableNode | undefined,
         protected name: string,
@@ -262,6 +268,8 @@ export class LiveVariableNode extends BaseNode {
             this.hasMoreChildren = false;
             this.childStart = 0;
             this.forwardPagingDisabled = false;
+            this.searchIndex = undefined;
+            this.searchIndexReference = 0;
         }
         for (const child of this.children || []) {
             child.reset(valuesToo);
@@ -295,7 +303,9 @@ export class LiveVariableNode extends BaseNode {
                     value: child.value,
                     children: child.children,
                     childStart: child.childStart,
-                    hasMoreChildren: child.hasMoreChildren
+                    hasMoreChildren: child.hasMoreChildren,
+                    searchIndex: child.searchIndex,
+                    searchIndexReference: child.searchIndexReference
                 };
             }
             this.session.customRequest('liveVariables', varg).then((result) => {
@@ -347,6 +357,8 @@ export class LiveVariableNode extends BaseNode {
                             ch.children = oldState.children;     // These will get refreshed later
                             ch.childStart = oldState.childStart;
                             ch.hasMoreChildren = oldState.hasMoreChildren;
+                            ch.searchIndex = oldState.searchIndex;
+                            ch.searchIndexReference = oldState.searchIndexReference;
                             ch.forwardPagingDisabled = false;
                         }
                         ch.session = this.session;
@@ -411,6 +423,8 @@ export class LiveVariableNode extends BaseNode {
                             this.childStart = 0;
                             this.hasMoreChildren = false;
                             this.forwardPagingDisabled = false;
+                            this.searchIndex = undefined;
+                            this.searchIndexReference = 0;
                         }
                         this.refreshChildren(resolve);
                     } else {
@@ -482,8 +496,11 @@ export class LiveVariableNode extends BaseNode {
         quickPick.matchOnDetail = true;
 
         let searchTimer: NodeJS.Timeout | undefined;
-        let requestSeq = 0;
         let accepted = false;
+        let closed = false;
+        let indexReady = this.searchIndexReference === this.variablesReference && !!this.searchIndex;
+        let currentIndex = indexReady ? this.searchIndex : undefined;
+        const maxShownMatches = 200;
 
         const toItems = (matches: LiveWatchSearchMatch[]): LiveWatchSearchQuickPickItem[] => {
             return matches.map((match) => ({
@@ -495,51 +512,75 @@ export class LiveVariableNode extends BaseNode {
             }));
         };
 
-        const runSearch = async (query: string, seq: number) => {
+        const filterIndex = (query: string) => {
             const trimmed = query.trim();
-            if (!trimmed) {
-                quickPick.busy = false;
+            if (!indexReady || !currentIndex) {
                 quickPick.items = [];
-                quickPick.placeholder = 'Type member name, for example EQ_ARB';
+                quickPick.placeholder = 'Building member name index...';
+                return;
+            }
+            if (!trimmed) {
+                quickPick.items = [];
+                quickPick.placeholder = `Indexed ${currentIndex.length} children. Type member name, for example EQ_ARB`;
                 return;
             }
 
+            const normalizedQuery = trimmed.toLowerCase();
+            const matches: LiveWatchSearchMatch[] = [];
+            let truncated = false;
+            for (const match of currentIndex) {
+                if (match.name.toLowerCase().includes(normalizedQuery)) {
+                    if (matches.length < maxShownMatches) {
+                        matches.push(match);
+                    } else {
+                        truncated = true;
+                        break;
+                    }
+                }
+            }
+            quickPick.items = toItems(matches);
+            quickPick.placeholder = truncated
+                ? `Showing first ${matches.length} matches for "${trimmed}"; type more letters to narrow`
+                : (matches.length
+                        ? `Select a child matching "${trimmed}"`
+                        : `No children matched "${trimmed}"`);
+            LiveVariableNode.debugPaging(`search-filter node=${this.debugPath()} ref=${this.variablesReference}`
+                + ` query="${trimmed}" matches=${matches.length} indexed=${currentIndex.length} truncated=${truncated}`);
+        };
+
+        const buildIndex = async () => {
             quickPick.busy = true;
-            quickPick.placeholder = `Searching "${trimmed}"...`;
-            LiveVariableNode.debugPaging(`search-start node=${this.debugPath()} ref=${this.variablesReference}`
-                + ` query="${trimmed}" maxVisible=${LiveVariableNode.maxVisibleChildren} seq=${seq}`);
+            quickPick.placeholder = 'Building member name index...';
+            LiveVariableNode.debugPaging(`search-index-start node=${this.debugPath()} ref=${this.variablesReference}`
+                + ` maxVisible=${LiveVariableNode.maxVisibleChildren}`);
             try {
                 const result = await this.session.customRequest('liveSearchVariables', {
                     variablesReference: this.variablesReference,
-                    query: trimmed,
-                    maxResults: 200,
+                    query: '',
+                    buildIndex: true,
+                    maxResults: 100000,
                     windowSize: LiveVariableNode.maxVisibleChildren
                 }) as LiveWatchSearchResult;
-                if (seq !== requestSeq) {
-                    return;
+                this.searchIndex = result?.matches ?? [];
+                this.searchIndexReference = this.variablesReference;
+                currentIndex = this.searchIndex;
+                indexReady = true;
+                LiveVariableNode.debugPaging(`search-index-ready node=${this.debugPath()} ref=${this.variablesReference}`
+                    + ` indexed=${currentIndex.length} scanned=${result?.scanned ?? '<none>'}`
+                    + ` backendIndexed=${result?.indexed ?? '<none>'} cacheHit=${!!result?.cacheHit}`);
+                if (!closed) {
+                    filterIndex(quickPick.value);
                 }
-
-                const matches: LiveWatchSearchMatch[] = result?.matches ?? [];
-                LiveVariableNode.debugPaging(`search-result node=${this.debugPath()} ref=${this.variablesReference}`
-                    + ` query="${trimmed}" matches=${matches.length} scanned=${result?.scanned ?? '<none>'}`
-                    + ` truncated=${!!result?.truncated} seq=${seq}`);
-                quickPick.items = toItems(matches);
-                quickPick.placeholder = result?.truncated
-                    ? `Showing first ${matches.length} matches for "${trimmed}"; type more letters to narrow`
-                    : (matches.length
-                            ? `Select a child matching "${trimmed}"`
-                            : `No children matched "${trimmed}"`);
             } catch (err) {
-                if (seq !== requestSeq) {
-                    return;
+                if (!closed) {
+                    LiveVariableNode.debugPaging(`search-index-error node=${this.debugPath()} ref=${this.variablesReference}`
+                        + ` error=${err}`);
+                    quickPick.items = [];
+                    quickPick.placeholder = `Search failed: ${err}`;
+                    vscode.window.showErrorMessage(`Live Watch search failed: ${err}`);
                 }
-                LiveVariableNode.debugPaging(`search-error node=${this.debugPath()} ref=${this.variablesReference}`
-                    + ` query="${trimmed}" error=${err} seq=${seq}`);
-                quickPick.items = [];
-                quickPick.placeholder = `Search failed: ${err}`;
-                vscode.window.showErrorMessage(`Live Watch search failed: ${err}`);
             } finally {
-                if (seq === requestSeq) {
+                if (!closed) {
                     quickPick.busy = false;
                 }
             }
@@ -549,13 +590,9 @@ export class LiveVariableNode extends BaseNode {
             if (searchTimer) {
                 clearTimeout(searchTimer);
             }
-            const seq = ++requestSeq;
             searchTimer = setTimeout(() => {
-                runSearch(query, seq).catch((err) => {
-                    LiveVariableNode.debugPaging(`search-unhandled-error node=${this.debugPath()}`
-                        + ` query="${query}" error=${err} seq=${seq}`);
-                });
-            }, 250);
+                filterIndex(query);
+            }, 50);
         };
 
         const selected = await new Promise<LiveWatchSearchQuickPickItem | undefined>((resolve) => {
@@ -566,18 +603,26 @@ export class LiveVariableNode extends BaseNode {
                 quickPick.hide();
             });
             quickPick.onDidHide(() => {
+                closed = true;
                 if (!accepted) {
                     resolve(undefined);
                 }
                 quickPick.dispose();
             });
             quickPick.show();
+            if (indexReady) {
+                filterIndex(quickPick.value);
+            } else {
+                buildIndex().catch((err) => {
+                    LiveVariableNode.debugPaging(`search-index-unhandled-error node=${this.debugPath()}`
+                        + ` error=${err}`);
+                });
+            }
         });
 
         if (searchTimer) {
             clearTimeout(searchTimer);
         }
-        requestSeq++;
         if (!selected) {
             return;
         }
