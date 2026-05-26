@@ -1330,6 +1330,13 @@ export class GDBDebugSession extends LoggingDebugSession {
                     this.sendResponse(response);
                 }
                 break;
+            case 'liveSearchVariables':
+                if (this.miLiveGdb) {
+                    return this.miLiveGdb.searchVariablesRequest(response, args);
+                } else {
+                    this.sendResponse(response);
+                }
+                break;
             case 'liveSetVariable':
                 if (this.miLiveGdb) {
                     return this.miLiveGdb.setVariableRequest(response, args);

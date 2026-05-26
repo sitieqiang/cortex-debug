@@ -18,6 +18,15 @@ export interface ReadMemResults {
     data: string;
 }
 
+export interface LiveWatchSearchMatch {
+    name: string;
+    type: string;
+    parent: string;
+    directIndex: number;
+    displayIndex: number;
+    suggestedStart: number;
+}
+
 export function parseReadMemResults(node: MINode): ReadMemResults {
     const startAddress = node.resultRecords.results[0][1][0][0][1];
     const endAddress = node.resultRecords.results[0][1][0][2][1];
@@ -1121,6 +1130,115 @@ export class MI2 extends EventEmitter implements IBackend {
             + ` first=${omg[0]?.exp ?? '<none>'}/${omg[0]?.name ?? '<none>'}`
             + ` last=${omg[omg.length - 1]?.exp ?? '<none>'}/${omg[omg.length - 1]?.name ?? '<none>'}`);
         return omg;
+    }
+
+    private async varListChildrenNoValues(parent: number, name: string, start?: number, count?: number): Promise<VariableObject[]> {
+        const rangeArgs = (start !== undefined && count !== undefined) ? ` ${start} ${start + count}` : '';
+        const res = await this.sendCommand(`var-list-children --no-values "${name}"${rangeArgs}`);
+        const children = res.result('children') || [];
+        const ret: VariableObject[] = [];
+        for (const item of children) {
+            ret.push(new VariableObject(parent, item[1]));
+        }
+        return ret;
+    }
+
+    public async varSearchChildren(
+        parent: number,
+        name: string,
+        query: string,
+        maxResults: number,
+        windowSize: number,
+        totalChildren?: number): Promise<{ matches: LiveWatchSearchMatch[]; truncated: boolean; scanned: number }> {
+        const normalizedQuery = query.toLowerCase();
+        const resultLimit = Math.max(1, Math.floor(maxResults || 100));
+        const displayWindow = Math.max(1, Math.floor(windowSize || 128));
+        const directPageSize = 64;
+        const keywords = ['private', 'protected', 'public'];
+        const directDisplayStarts: number[] = [];
+        const matches: LiveWatchSearchMatch[] = [];
+        let displayIndex = 0;
+        let directIndex = 0;
+        let truncated = false;
+
+        const isSyntheticChild = (child: VariableObject) => {
+            return child.exp.startsWith('<anonymous ') || keywords.includes(child.exp);
+        };
+
+        const flattenVisibleChildren = async (child: VariableObject, depth = 0): Promise<VariableObject[]> => {
+            if (!isSyntheticChild(child) || depth > 8) {
+                return [child];
+            }
+            const nestedChildren = await this.varListChildrenNoValues(parent, child.name);
+            const ret: VariableObject[] = [];
+            for (const nested of nestedChildren) {
+                if (isSyntheticChild(nested)) {
+                    ret.push(...await flattenVisibleChildren(nested, depth + 1));
+                } else {
+                    ret.push(nested);
+                }
+            }
+            return ret;
+        };
+
+        const getSuggestedStart = (matchDisplayIndex: number): number => {
+            const targetDisplayStart = Math.max(0, matchDisplayIndex - Math.floor(displayWindow / 2));
+            let suggestedStart = 0;
+            for (let ix = 0; ix < directDisplayStarts.length; ix++) {
+                if (directDisplayStarts[ix] <= targetDisplayStart) {
+                    suggestedStart = ix;
+                } else {
+                    break;
+                }
+            }
+            return suggestedStart;
+        };
+
+        const finiteTotal = Number.isFinite(totalChildren) ? totalChildren : Number.POSITIVE_INFINITY;
+        while (directIndex < finiteTotal && matches.length < resultLimit) {
+            const count = Math.min(directPageSize, finiteTotal - directIndex);
+            const directChildren = await this.varListChildrenNoValues(parent, name, directIndex, count);
+            if (!directChildren.length) {
+                break;
+            }
+
+            for (const directChild of directChildren) {
+                directDisplayStarts[directIndex] = displayIndex;
+                const visibleChildren = await flattenVisibleChildren(directChild);
+                for (const visibleChild of visibleChildren) {
+                    const childName = visibleChild.exp || visibleChild.name;
+                    if (childName.toLowerCase().includes(normalizedQuery)) {
+                        matches.push({
+                            name: childName,
+                            type: visibleChild.type || '',
+                            parent: isSyntheticChild(directChild) ? (directChild.exp || directChild.name) : '',
+                            directIndex,
+                            displayIndex,
+                            suggestedStart: getSuggestedStart(displayIndex)
+                        });
+                        if (matches.length >= resultLimit) {
+                            truncated = true;
+                            break;
+                        }
+                    }
+                    displayIndex++;
+                }
+                directIndex++;
+                if (matches.length >= resultLimit || directIndex >= finiteTotal) {
+                    break;
+                }
+            }
+
+            if (directChildren.length < count) {
+                break;
+            }
+        }
+
+        return {
+            matches,
+            truncated,
+            scanned: displayIndex
+        };
     }
 
     public static getThreadFrameStr(threadId: number | undefined, frameId: number | undefined): string {

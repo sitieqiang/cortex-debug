@@ -483,6 +483,46 @@ export class VariablesHandler {
         }
     }
 
+    public async searchChildrenRequest(
+        response: DebugProtocol.Response, args: any,
+        miDebugger: MI2, session: GDBDebugSession): Promise<void> {
+        const ref = args?.variablesReference;
+        const query = (args?.query ?? '').toString();
+        response.body = { matches: [], truncated: false, scanned: 0 };
+        if (!ref || !query) {
+            session.sendResponse(response);
+            return;
+        }
+
+        const id = this.variableHandles.get(ref);
+        if (!(id instanceof VariableObject)) {
+            session.sendResponse(response);
+            return;
+        }
+
+        try {
+            this.pagingLog(session, `searchChildrenRequest parentExp=${id.exp} parentName=${id.name}`
+                + ` ref=${ref} query="${query}" maxResults=${args?.maxResults ?? '<none>'}`
+                + ` windowSize=${args?.windowSize ?? '<none>'} totalChildren=${id.numchild}`);
+            const result = await miDebugger.varSearchChildren(
+                ref,
+                id.name,
+                query,
+                args?.maxResults ?? 100,
+                args?.windowSize ?? 128,
+                id.numchild);
+            response.body = result;
+            this.pagingLog(session, `searchChildrenResponse parentExp=${id.exp} ref=${ref}`
+                + ` query="${query}" matches=${result.matches.length} scanned=${result.scanned}`
+                + ` truncated=${result.truncated}`
+                + ` first=${result.matches[0]?.name ?? '<none>'}/${result.matches[0]?.suggestedStart ?? '<none>'}`);
+            session.sendResponse(response);
+        } catch (err) {
+            this.pagingLog(session, `searchChildrenError ref=${ref} query="${query}" error=${err}`);
+            session.sendErrorResponsePub(response, 1, `Could not search variable children: ${err}`);
+        }
+    }
+
     private async fetchChildrenPage(
         miDebugger: MI2, variablesReference: number, name: string, start?: number, count?: number,
         pagingLog?: (message: string) => void): Promise<VariableObject[]> {
@@ -587,6 +627,11 @@ export class LiveWatchMonitor {
 
     public async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments): Promise<void> {
         const ret = await this.varHandler.variablesChildrenRequest(response, args, this.miDebugger, this.mainSession);
+        return ret;
+    }
+
+    public async searchVariablesRequest(response: DebugProtocol.Response, args: any): Promise<void> {
+        const ret = await this.varHandler.searchChildrenRequest(response, args, this.miDebugger, this.mainSession);
         return ret;
     }
 

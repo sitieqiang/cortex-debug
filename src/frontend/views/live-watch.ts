@@ -16,6 +16,22 @@ interface SaveVarState {
 interface SaveVarStateMap {
     [name: string]: SaveVarState;
 }
+
+interface LiveWatchSearchMatch {
+    name: string;
+    type: string;
+    parent: string;
+    directIndex: number;
+    displayIndex: number;
+    suggestedStart: number;
+}
+
+interface LiveWatchSearchResult {
+    matches: LiveWatchSearchMatch[];
+    truncated?: boolean;
+    scanned?: number;
+}
+
 export class LiveVariableNode extends BaseNode {
     private static readonly defaultMaxVisibleChildren = 128;
     private static readonly defaultPageSize = 64;
@@ -446,6 +462,135 @@ export class LiveVariableNode extends BaseNode {
             LiveVariableNode.debugPaging(`click-load-previous-applied node=${this.debugPath()} before=${before} after=${this.childStart}`);
             this.refreshChildren(resolve);
         });
+    }
+
+    public async searchChildren(): Promise<void> {
+        if (!LiveWatchTreeProvider.session || this.session !== LiveWatchTreeProvider.session || this.variablesReference <= 0) {
+            vscode.window.showInformationMessage('Live Watch: selected item has no searchable children');
+            return;
+        }
+
+        interface LiveWatchSearchQuickPickItem extends vscode.QuickPickItem {
+            match: LiveWatchSearchMatch;
+        }
+
+        const quickPick = vscode.window.createQuickPick<LiveWatchSearchQuickPickItem>();
+        quickPick.title = `Search ${this.debugPath()}`;
+        quickPick.placeholder = 'Type member name, for example EQ_ARB';
+        quickPick.ignoreFocusOut = true;
+        quickPick.matchOnDescription = true;
+        quickPick.matchOnDetail = true;
+
+        let searchTimer: NodeJS.Timeout | undefined;
+        let requestSeq = 0;
+        let accepted = false;
+
+        const toItems = (matches: LiveWatchSearchMatch[]): LiveWatchSearchQuickPickItem[] => {
+            return matches.map((match) => ({
+                label: match.name,
+                description: match.type || undefined,
+                detail: `display index ${match.displayIndex}, parent index ${match.directIndex}, window start ${match.suggestedStart}`
+                    + (match.parent ? `, parent ${match.parent}` : ''),
+                match
+            }));
+        };
+
+        const runSearch = async (query: string, seq: number) => {
+            const trimmed = query.trim();
+            if (!trimmed) {
+                quickPick.busy = false;
+                quickPick.items = [];
+                quickPick.placeholder = 'Type member name, for example EQ_ARB';
+                return;
+            }
+
+            quickPick.busy = true;
+            quickPick.placeholder = `Searching "${trimmed}"...`;
+            LiveVariableNode.debugPaging(`search-start node=${this.debugPath()} ref=${this.variablesReference}`
+                + ` query="${trimmed}" maxVisible=${LiveVariableNode.maxVisibleChildren} seq=${seq}`);
+            try {
+                const result = await this.session.customRequest('liveSearchVariables', {
+                    variablesReference: this.variablesReference,
+                    query: trimmed,
+                    maxResults: 200,
+                    windowSize: LiveVariableNode.maxVisibleChildren
+                }) as LiveWatchSearchResult;
+                if (seq !== requestSeq) {
+                    return;
+                }
+
+                const matches: LiveWatchSearchMatch[] = result?.matches ?? [];
+                LiveVariableNode.debugPaging(`search-result node=${this.debugPath()} ref=${this.variablesReference}`
+                    + ` query="${trimmed}" matches=${matches.length} scanned=${result?.scanned ?? '<none>'}`
+                    + ` truncated=${!!result?.truncated} seq=${seq}`);
+                quickPick.items = toItems(matches);
+                quickPick.placeholder = result?.truncated
+                    ? `Showing first ${matches.length} matches for "${trimmed}"; type more letters to narrow`
+                    : (matches.length
+                            ? `Select a child matching "${trimmed}"`
+                            : `No children matched "${trimmed}"`);
+            } catch (err) {
+                if (seq !== requestSeq) {
+                    return;
+                }
+                LiveVariableNode.debugPaging(`search-error node=${this.debugPath()} ref=${this.variablesReference}`
+                    + ` query="${trimmed}" error=${err} seq=${seq}`);
+                quickPick.items = [];
+                quickPick.placeholder = `Search failed: ${err}`;
+                vscode.window.showErrorMessage(`Live Watch search failed: ${err}`);
+            } finally {
+                if (seq === requestSeq) {
+                    quickPick.busy = false;
+                }
+            }
+        };
+
+        const scheduleSearch = (query: string) => {
+            if (searchTimer) {
+                clearTimeout(searchTimer);
+            }
+            const seq = ++requestSeq;
+            searchTimer = setTimeout(() => {
+                runSearch(query, seq).catch((err) => {
+                    LiveVariableNode.debugPaging(`search-unhandled-error node=${this.debugPath()}`
+                        + ` query="${query}" error=${err} seq=${seq}`);
+                });
+            }, 250);
+        };
+
+        const selected = await new Promise<LiveWatchSearchQuickPickItem | undefined>((resolve) => {
+            quickPick.onDidChangeValue(scheduleSearch);
+            quickPick.onDidAccept(() => {
+                accepted = true;
+                resolve(quickPick.selectedItems[0]);
+                quickPick.hide();
+            });
+            quickPick.onDidHide(() => {
+                if (!accepted) {
+                    resolve(undefined);
+                }
+                quickPick.dispose();
+            });
+            quickPick.show();
+        });
+
+        if (searchTimer) {
+            clearTimeout(searchTimer);
+        }
+        requestSeq++;
+        if (!selected) {
+            return;
+        }
+
+        const before = this.childStart;
+        this.childStart = Math.max(0, Math.floor(selected.match.suggestedStart || 0));
+        this.forwardPagingDisabled = false;
+        this.hasMoreChildren = true;
+        this.expanded = true;
+        LiveVariableNode.debugPaging(`search-select node=${this.debugPath()} name=${selected.match.name}`
+            + ` displayIndex=${selected.match.displayIndex} directIndex=${selected.match.directIndex}`
+            + ` startBefore=${before} startAfter=${this.childStart}`);
+        await new Promise<void>((resolve) => this.refreshChildren(resolve));
     }
 
     public collectActiveItems(variableReferences: Set<number>, expressions: Set<string>): void {
@@ -946,6 +1091,14 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
     public loadPreviousChildren(element: LiveVariableNode) {
         if (element) {
             element.loadPreviousChildren().then(() => {
+                this.fire();
+            });
+        }
+    }
+
+    public searchChildren(element: LiveVariableNode) {
+        if (element) {
+            element.searchChildren().then(() => {
                 this.fire();
             });
         }

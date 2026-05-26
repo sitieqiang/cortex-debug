@@ -467,6 +467,11 @@
                 "icon": "$(edit)"
             },
             {
+                "command": "cortex-debug.liveWatch.searchChildren",
+                "title": "Search Children",
+                "icon": "$(search)"
+            },
+            {
                 "command": "cortex-debug.liveWatch.addToLiveWatch",
                 "title": "Add to Live Watch",
                 "icon": "$(plus)"
@@ -3188,6 +3193,11 @@
                     "command": "cortex-debug.liveWatch.removeExpr",
                     "when": "view == cortex-debug.liveWatch && viewItem == expression",
                     "group": "inline"
+                },
+                {
+                    "command": "cortex-debug.liveWatch.searchChildren",
+                    "when": "view == cortex-debug.liveWatch && inDebugMode && debugType == 'cortex-debug' && (viewItem == expression || viewItem == field)",
+                    "group": "navigation@1"
                 },
                 {
                     "command": "cortex-debug.watchpointWrite",

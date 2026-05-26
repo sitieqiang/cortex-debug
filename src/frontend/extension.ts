@@ -95,6 +95,7 @@ export class CortexDebugExtension {
             vscode.commands.registerCommand('cortex-debug.liveWatch.editValue', this.editLiveWatchValue.bind(this)),
             vscode.commands.registerCommand('cortex-debug.liveWatch.loadMore', this.loadMoreLiveWatchChildren.bind(this)),
             vscode.commands.registerCommand('cortex-debug.liveWatch.loadPrevious', this.loadPreviousLiveWatchChildren.bind(this)),
+            vscode.commands.registerCommand('cortex-debug.liveWatch.searchChildren', this.searchLiveWatchChildren.bind(this)),
             vscode.commands.registerCommand('cortex-debug.liveWatch.forceRefresh', this.forceRefreshLiveWatch.bind(this)),
 
             vscode.commands.registerCommand('cortex-debug.watchpointWrite', (arg) => this.addWatchpoint(arg, 'write')),
@@ -996,6 +997,10 @@ export class CortexDebugExtension {
 
     private loadPreviousLiveWatchChildren(node: any) {
         this.liveWatchProvider.loadPreviousChildren(node);
+    }
+
+    private searchLiveWatchChildren(node: any) {
+        this.liveWatchProvider.searchChildren(node);
     }
 
     private forceRefreshLiveWatch() {
