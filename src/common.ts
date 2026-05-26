@@ -240,6 +240,10 @@ export interface SymbolFile {
 export interface LiveWatchConfig {
     enabled: boolean;
     samplesPerSecond?: number;
+    liveWatchMaxVisibleChildren?: number;
+    liveWatchPageSize?: number;
+    maxVisibleChildren?: number;
+    pageSize?: number;
 }
 
 // Helper function to create a symbolFile object properly with required elements

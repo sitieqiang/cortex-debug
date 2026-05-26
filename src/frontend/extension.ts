@@ -93,6 +93,8 @@ export class CortexDebugExtension {
             vscode.commands.registerCommand('cortex-debug.liveWatch.moveUp', this.moveUpLiveWatchExpr.bind(this)),
             vscode.commands.registerCommand('cortex-debug.liveWatch.moveDown', this.moveDownLiveWatchExpr.bind(this)),
             vscode.commands.registerCommand('cortex-debug.liveWatch.editValue', this.editLiveWatchValue.bind(this)),
+            vscode.commands.registerCommand('cortex-debug.liveWatch.loadMore', this.loadMoreLiveWatchChildren.bind(this)),
+            vscode.commands.registerCommand('cortex-debug.liveWatch.loadPrevious', this.loadPreviousLiveWatchChildren.bind(this)),
             vscode.commands.registerCommand('cortex-debug.liveWatch.forceRefresh', this.forceRefreshLiveWatch.bind(this)),
 
             vscode.commands.registerCommand('cortex-debug.watchpointWrite', (arg) => this.addWatchpoint(arg, 'write')),
@@ -155,8 +157,12 @@ export class CortexDebugExtension {
             this.liveWatchTreeView.onDidCollapseElement((e) => {
                 e.element.expanded = false;
                 this.liveWatchProvider.saveState();
+            }),
+            this.liveWatchTreeView.onDidChangeVisibility((e) => {
+                this.liveWatchProvider.setVisible(e.visible);
             })
         );
+        this.liveWatchProvider.setVisible(this.liveWatchTreeView.visible);
     }
 
     private textDocsClosed(e: vscode.TextDocument) {
@@ -982,6 +988,14 @@ export class CortexDebugExtension {
 
     private editLiveWatchValue(node: any) {
         this.liveWatchProvider.editValue(node);
+    }
+
+    private loadMoreLiveWatchChildren(node: any) {
+        this.liveWatchProvider.loadMoreChildren(node);
+    }
+
+    private loadPreviousLiveWatchChildren(node: any) {
+        this.liveWatchProvider.loadPreviousChildren(node);
     }
 
     private forceRefreshLiveWatch() {

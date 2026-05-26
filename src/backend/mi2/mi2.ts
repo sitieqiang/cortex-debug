@@ -978,15 +978,82 @@ export class MI2 extends EventEmitter implements IBackend {
         return this.sendCommand(`var-evaluate-expression ${name}`);
     }
 
-    public async varListChildren(parent: number, name: string, fetchAddresses = false): Promise<VariableObject[]> {
+    public async varListChildren(parent: number, name: string, fetchAddresses = false, start?: number, count?: number): Promise<VariableObject[]> {
         if (trace) {
             this.log('stderr', 'varListChildren');
         }
-        // TODO: add `from` and `to` arguments
-        const res = await this.sendCommand(`var-list-children --all-values "${name}"`);
+        const shouldLogPaging = start !== undefined || count !== undefined;
+        const logPaging = (message: string) => {
+            if (shouldLogPaging) {
+                this.log('log', `DebugLiveWatchPaging: ${message}`);
+            }
+        };
+        const describeRawChildren = (items: any[]) => {
+            if (!items.length) {
+                return 'first=<none> last=<none>';
+            }
+            const describe = (item: any) => {
+                const child = new VariableObject(parent, item[1]);
+                return `${child.exp}/${child.name}/numchild=${child.numchild}`;
+            };
+            return `first=${describe(items[0])} last=${describe(items[items.length - 1])}`;
+        };
+        const rangeArgs = (start !== undefined && count !== undefined) ? ` ${start} ${start + count}` : '';
+        logPaging(`mi2.varListChildren command name=${name} start=${start ?? '<none>'} count=${count ?? '<none>'}`
+            + ` rangeArgs="${rangeArgs.trim() || '<none>'}" fetchAddresses=${fetchAddresses}`);
+        const res = await this.sendCommand(`var-list-children --all-values "${name}"${rangeArgs}`);
         const keywords = ['private', 'protected', 'public'];
         const children = res.result('children') || [];
         const omg: VariableObject[] = [];
+        const hasMore = res.result('has_more');
+        (omg as any).hasMore = hasMore === '1' || hasMore === 'true';
+        logPaging(`mi2.varListChildren directResult name=${name} start=${start ?? '<none>'}`
+            + ` count=${count ?? '<none>'} directChildren=${children.length} hasMore=${hasMore ?? '<none>'}`
+            + ` ${describeRawChildren(children)}`);
+        const isSyntheticChild = (child: VariableObject) => {
+            return child.exp.startsWith('<anonymous ') || keywords.includes(child.exp);
+        };
+
+        if (!children.length && start !== undefined && start > 0 && count !== undefined) {
+            const syntheticProbeCount = keywords.length + 2;
+            logPaging(`mi2.varListChildren positiveStartEmpty name=${name} start=${start}`
+                + ` count=${count}; probing first ${syntheticProbeCount} parent children for synthetic wrappers`);
+            const probe = await this.sendCommand(`var-list-children --all-values "${name}" 0 ${syntheticProbeCount}`);
+            const probeChildren = (probe.result('children') || [])
+                .map((item) => new VariableObject(parent, item[1]));
+            const syntheticChildren = probeChildren.filter(isSyntheticChild);
+            const probeHasMore = probe.result('has_more');
+            logPaging(`mi2.varListChildren syntheticProbe name=${name} probeChildren=${probeChildren.length}`
+                + ` syntheticChildren=${syntheticChildren.length} probeHasMore=${probeHasMore ?? '<none>'}`
+                + ` wrappers=${syntheticChildren.map((child) => `${child.exp}/${child.name}/numchild=${child.numchild}`).join(',') || '<none>'}`);
+
+            if (syntheticChildren.length
+                && syntheticChildren.length === probeChildren.length
+                && probeHasMore !== '1'
+                && probeHasMore !== 'true') {
+                let nestedStart = start;
+                let nestedCount = count;
+                for (const child of syntheticChildren) {
+                    if (Number.isFinite(child.numchild) && nestedStart >= child.numchild) {
+                        nestedStart -= child.numchild;
+                        continue;
+                    }
+                    logPaging(`mi2.varListChildren syntheticNested name=${name} wrapper=${child.exp}/${child.name}`
+                        + ` nestedStart=${nestedStart} nestedCount=${nestedCount}`);
+                    const nested = await this.varListChildren(parent, child.name, fetchAddresses, nestedStart, nestedCount);
+                    (omg as any).hasMore = (omg as any).hasMore || !!(nested as any).hasMore;
+                    omg.push(...nested);
+                    nestedCount -= nested.length;
+                    if (nestedCount <= 0) {
+                        break;
+                    }
+                    nestedStart = 0;
+                }
+                logPaging(`mi2.varListChildren syntheticReturn name=${name} returned=${omg.length}`
+                    + ` hasMore=${!!(omg as any).hasMore}`);
+                return omg;
+            }
+        }
 
         // Pre-fetch parent's path expression once for all children.
         // GDB's var-info-path-expression is buggy for bitfield children in struct arrays,
@@ -1004,9 +1071,19 @@ export class MI2 extends EventEmitter implements IBackend {
         for (const item of children) {
             const child = new VariableObject(parent, item[1]);
             if (child.exp.startsWith('<anonymous ')) {
-                omg.push(...await this.varListChildren(parent, child.name, fetchAddresses));
+                const nestedStart = (start !== undefined && count !== undefined) ? 0 : start;
+                logPaging(`mi2.varListChildren expandAnonymous parent=${name} child=${child.exp}/${child.name}`
+                    + ` parentStart=${start ?? '<none>'} nestedStart=${nestedStart ?? '<none>'}`
+                    + ` count=${count ?? '<none>'} numchild=${child.numchild}`);
+                const nested = await this.varListChildren(parent, child.name, fetchAddresses, nestedStart, count);
+                (omg as any).hasMore = (omg as any).hasMore || !!(nested as any).hasMore;
+                omg.push(...nested);
             } else if (keywords.find((x) => x === child.exp)) {
-                omg.push(...await this.varListChildren(parent, child.name, fetchAddresses));
+                logPaging(`mi2.varListChildren expandKeyword parent=${name} child=${child.exp}/${child.name}`
+                    + ` start=${start ?? '<none>'} count=${count ?? '<none>'} numchild=${child.numchild}`);
+                const nested = await this.varListChildren(parent, child.name, fetchAddresses, start, count);
+                (omg as any).hasMore = (omg as any).hasMore || !!(nested as any).hasMore;
+                omg.push(...nested);
             } else {
                 // Only fetch addresses if explicitly requested (for live watch)
                 if (fetchAddresses && parentPath) {
@@ -1040,6 +1117,9 @@ export class MI2 extends EventEmitter implements IBackend {
                 omg.push(child);
             }
         }
+        logPaging(`mi2.varListChildren final name=${name} returned=${omg.length} hasMore=${!!(omg as any).hasMore}`
+            + ` first=${omg[0]?.exp ?? '<none>'}/${omg[0]?.name ?? '<none>'}`
+            + ` last=${omg[omg.length - 1]?.exp ?? '<none>'}/${omg[omg.length - 1]?.name ?? '<none>'}`);
         return omg;
     }
 

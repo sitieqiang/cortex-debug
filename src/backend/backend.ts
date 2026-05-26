@@ -105,7 +105,8 @@ export class VariableObject {
         this.displayhint = MINode.valueOf(node, 'displayhint');
         this.children = {};
         // TODO: use has_more when it's > 0
-        this.hasMore = !!MINode.valueOf(node, 'has_more');
+        const hasMore = MINode.valueOf(node, 'has_more');
+        this.hasMore = hasMore === true || hasMore === '1' || hasMore === 'true';
         this.address = MINode.valueOf(node, 'addr') || '';
     }
 
@@ -138,7 +139,10 @@ export class VariableObject {
         }
         this.dynamic = !!MINode.valueOf(node, 'dynamic');
         this.displayhint = MINode.valueOf(node, 'displayhint');
-        this.hasMore = !!MINode.valueOf(node, 'has_more');
+        const hasMore = MINode.valueOf(node, 'has_more');
+        if (hasMore !== undefined) {
+            this.hasMore = hasMore === true || hasMore === '1' || hasMore === 'true';
+        }
     }
 
     public isCompound(): boolean {

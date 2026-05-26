@@ -21,6 +21,20 @@ export class VariablesHandler {
         public busyError: (r: DebugProtocol.Response, a: any) => void
     ) { }
 
+    private pagingLog(session: GDBDebugSession, message: string): void {
+        session.handleMsg('log', `DebugLiveWatchPaging: ${message}\n`);
+    }
+
+    private describeChildren(children: VariableObject[]): string {
+        if (!children.length) {
+            return 'first=<none> last=<none>';
+        }
+        const describe = (child: VariableObject) => {
+            return `${child.exp}/${child.name}/ref=${child.id ?? 0}/numchild=${child.numchild}`;
+        };
+        return `first=${describe(children[0])} last=${describe(children[children.length - 1])}`;
+    }
+
     public async clearCachedVars(miDebugger: MI2) {
         if (this.cachedChangeList) {
             const poromises = [];
@@ -35,9 +49,49 @@ export class VariablesHandler {
         }
     }
 
-    public refreshCachedChangeList(miDebugger: MI2, resolve) {
+    private getLiveWatchVarObjName(expression: string): string {
+        const hasher = crypto.createHash('sha256');
+        hasher.update(expression);
+        return `hover_${hasher.digest('hex')}`;
+    }
+
+    private getActiveVarObjNames(args?: RefreshAllArguments): string[] | undefined {
+        if (!args || (!args.expressions && !args.variableReferences)) {
+            return undefined;
+        }
+
+        const names = new Set<string>();
+        for (const expression of args.expressions ?? []) {
+            if (typeof expression !== 'string') {
+                continue;
+            }
+            const name = this.getLiveWatchVarObjName(expression);
+            if (this.variableHandlesReverse.get(name) !== undefined) {
+                names.add(name);
+            }
+        }
+        for (const ref of args.variableReferences ?? []) {
+            if (typeof ref !== 'number' || ref <= 0) {
+                continue;
+            }
+            const variable = this.variableHandles.get(ref);
+            if (variable instanceof VariableObject) {
+                names.add(variable.name);
+            }
+        }
+        return Array.from(names);
+    }
+
+    public async refreshCachedChangeList(miDebugger: MI2, args?: RefreshAllArguments): Promise<void> {
+        const activeNames = this.getActiveVarObjNames(args);
+        if (activeNames && activeNames.length === 0) {
+            this.cachedChangeList = undefined;
+            return;
+        }
+
+        const updateNames = activeNames ?? ['*'];
         this.cachedChangeList = {};
-        miDebugger.varUpdate('*', -1, -1).then((changes: MINode) => {
+        const applyChanges = (changes: MINode): boolean => {
             const changelist = changes.result('changelist');
             for (const change of changelist || []) {
                 const name = MINode.valueOf(change, 'name');
@@ -47,15 +101,27 @@ export class VariablesHandler {
                 if ((inScope === 'false') || (typeChanged === 'true')) {
                     // If one of these conditions happened, abandon the entire cache. TODO: Optimize later
                     this.cachedChangeList = undefined;
-                    break;
+                    return false;
                 }
                 const vId = this.variableHandlesReverse.get(name);
                 const v = this.variableHandles.get(vId) as any;
-                v.applyChanges(change);
+                if (v) {
+                    v.applyChanges(change);
+                }
             }
-        }).finally (() => {
-            resolve();
-        });
+            return true;
+        };
+
+        for (const name of updateNames) {
+            try {
+                if (!applyChanges(await miDebugger.varUpdate(name, -1, -1))) {
+                    break;
+                }
+            } catch (e) {
+                this.cachedChangeList = undefined;
+                break;
+            }
+        }
     }
 
     public createVariable(arg: VariableType, options?: any) {
@@ -238,8 +304,9 @@ export class VariablesHandler {
         return this.evaluateQ.add(doit, r, a, miDebugger, session);
     }
 
-    public getCachedChilren(pVar: VariableObject): VariableObject[] | undefined {
+    public getCachedChilren(pVar: VariableObject, start?: number, count?: number): VariableObject[] | undefined {
         if (!this.cachedChangeList) { return undefined; }
+        if (start !== undefined || count !== undefined) { return undefined; }
         const keys = Object.keys(pVar.children);
         if (keys.length === 0) { return undefined; }        // We don't have previous children, force a refresh
         const ret: VariableObject[] = [];
@@ -274,26 +341,23 @@ export class VariablesHandler {
                 const childMap: { [name: string]: number } = {};
                 try {
                     const vars: DebugProtocol.Variable[] = [];
-                    children = this.getCachedChilren(pVar);
-                    if (!children) {
-                        children = await miDebugger.varListChildren(args.variablesReference, id.name, true);
-                        pVar.children = {};     // Clear in case type changed, dynamic variable, etc.
+                    const requestedStart = args.start;
+                    const requestedCount = args.count;
+                    const isPagingRequest = requestedStart !== undefined || requestedCount !== undefined;
+                    if (isPagingRequest) {
+                        this.pagingLog(session, `variablesChildrenRequest parentExp=${pVar.exp} parentName=${pVar.name}`
+                            + ` ref=${args.variablesReference} start=${requestedStart ?? '<none>'}`
+                            + ` count=${requestedCount ?? '<none>'} numchild=${pVar.numchild} type=${pVar.type}`);
                     }
-
-                    // Refresh addresses for all children after getting them
-                    for (const child of children) {
-                        if (child.fullExp || child.exp) {
-                            try {
-                                const childExpr = child.fullExp || child.exp;
-                                const addrResp = await miDebugger.sendCommand(`data-evaluate-expression "&${childExpr}"`);
-                                const addrValue = addrResp.result('value');
-                                if (addrValue && addrValue.startsWith('0x')) {
-                                    child.address = addrValue;
-                                }
-                            } catch (e) {
-                                // Address might not be available
-                            }
-                        }
+                    children = this.getCachedChilren(pVar, requestedStart, requestedCount);
+                    if (!children) {
+                        children = await this.fetchChildrenPage(
+                            miDebugger, args.variablesReference, id.name, requestedStart, requestedCount,
+                            isPagingRequest ? (message) => this.pagingLog(session, message) : undefined);
+                        pVar.hasMore = requestedStart !== undefined && pVar.numchild > 0
+                            ? requestedStart + children.length < pVar.numchild
+                            : !!(children as any).hasMore;
+                        pVar.children = {};     // Clear in case type changed, dynamic variable, etc.
                     }
 
                     // Map children to protocol variables
@@ -325,8 +389,25 @@ export class VariablesHandler {
                     response.body = {
                         variables: vars
                     };
+                    (response.body as any).hasMore = !!pVar.hasMore;
+                    if (Number.isFinite(pVar.numchild)) {
+                        (response.body as any).totalChildren = pVar.numchild;
+                    }
+                    if (isPagingRequest) {
+                        this.pagingLog(session, `variablesChildrenResponse parentExp=${pVar.exp} ref=${args.variablesReference}`
+                            + ` start=${requestedStart ?? '<none>'} count=${requestedCount ?? '<none>'}`
+                            + ` children=${children.length} variables=${vars.length} pVarHasMore=${pVar.hasMore}`
+                            + ` totalChildren=${Number.isFinite(pVar.numchild) ? pVar.numchild : '<none>'}`
+                            + ` ${this.describeChildren(children)}`);
+                    }
                     session.sendResponse(response);
                 } catch (err) {
+                    const requestedStart = args.start;
+                    const requestedCount = args.count;
+                    if (requestedStart !== undefined || requestedCount !== undefined) {
+                        this.pagingLog(session, `variablesChildrenError ref=${args.variablesReference}`
+                            + ` start=${requestedStart ?? '<none>'} count=${requestedCount ?? '<none>'} error=${err}`);
+                    }
                     session.sendErrorResponsePub(response, 1, `Could not expand variable: ${err}`);
                 }
             } else if (id instanceof ExtendedVariable) {
@@ -401,6 +482,47 @@ export class VariablesHandler {
             session.sendResponse(response);
         }
     }
+
+    private async fetchChildrenPage(
+        miDebugger: MI2, variablesReference: number, name: string, start?: number, count?: number,
+        pagingLog?: (message: string) => void): Promise<VariableObject[]> {
+        if (count === 0) {
+            pagingLog?.(`fetchChildrenPage skipped zero-count ref=${variablesReference} name=${name} start=${start ?? '<none>'}`);
+            return [];
+        }
+
+        pagingLog?.(`fetchChildrenPage direct ref=${variablesReference} name=${name} start=${start ?? '<none>'} count=${count ?? '<none>'}`);
+        let children = await miDebugger.varListChildren(variablesReference, name, true, start, count);
+        pagingLog?.(`fetchChildrenPage directResult ref=${variablesReference} name=${name} start=${start ?? '<none>'}`
+            + ` count=${count ?? '<none>'} returned=${children.length} gdbHasMore=${!!(children as any).hasMore}`
+            + ` ${this.describeChildren(children)}`);
+        if (children.length || start === undefined || start <= 0 || count === undefined || count <= 1) {
+            return children;
+        }
+
+        pagingLog?.(`fetchChildrenPage emptyWithPositiveStart ref=${variablesReference} name=${name}`
+            + ` start=${start} count=${count}; probing smaller counts`);
+        let low = 1;
+        let high = count - 1;
+        let best: VariableObject[] = [];
+        while (low <= high) {
+            const mid = Math.floor((low + high) / 2);
+            const trial = await miDebugger.varListChildren(variablesReference, name, true, start, mid);
+            pagingLog?.(`fetchChildrenPage trial ref=${variablesReference} name=${name} start=${start}`
+                + ` count=${mid} returned=${trial.length}`);
+            if (trial.length) {
+                best = trial;
+                low = mid + 1;
+            } else {
+                high = mid - 1;
+            }
+        }
+        children = best;
+        (children as any).hasMore = false;
+        pagingLog?.(`fetchChildrenPage fallbackResult ref=${variablesReference} name=${name} start=${start}`
+            + ` requestedCount=${count} returned=${children.length} ${this.describeChildren(children)}`);
+        return children;
+    }
 }
 
 export class LiveWatchMonitor {
@@ -474,9 +596,7 @@ export class LiveWatchMonitor {
             await this.varHandler.clearCachedVars(this.miDebugger);
             return Promise.resolve();
         }
-        return new Promise<void>((resolve) => {
-            this.varHandler.refreshCachedChangeList(this.miDebugger, resolve);
-        });
+        return this.varHandler.refreshCachedChangeList(this.miDebugger, args);
     }
 
     public async setVariableRequest(response: DebugProtocol.Response, args: any): Promise<void> {
@@ -960,4 +1080,7 @@ interface RefreshAllArguments {
     // Delete all gdb variables and the cache. This should be done when a live expression is deleted,
     // but otherwise, it is not needed
     deleteAll: boolean;
+    // When present, refresh only the currently visible/expanded Live Watch chain.
+    expressions?: string[];
+    variableReferences?: number[];
 }

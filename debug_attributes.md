@@ -47,6 +47,8 @@ If the type is marked as `{...}` it means that it is a complex item can have mul
 | jlinkscript | string | Both | J-Link script file - optional input file for customizing J-Link actions. |
 | liveWatch | object | Both | An object with parameters for Live Watch |
 | liveWatch<br>.enabled | boolean | Both | Enable/Disable Live Watch. Only applies to OpenOCD |
+| liveWatch<br>.liveWatchMaxVisibleChildren | number | Both | Maximum number of children displayed for each expanded Live Watch variable in this debug configuration. Overrides cortex-debug.liveWatchMaxVisibleChildren. |
+| liveWatch<br>.liveWatchPageSize | number | Both | Number of children to move when browsing a large expanded Live Watch variable in this debug configuration. Overrides cortex-debug.liveWatchPageSize and is capped at liveWatchMaxVisibleChildren. |
 | liveWatch<br>.samplesPerSecond | number | Both | Maximum number of samples per second. Different from GUI refresh-rate, which is a user/workspace setting |
 | loadFiles | string[] | Launch | List of files (hex/bin/elf files) to load/program instead of the executable file. Symbols are not loaded (see `symbolFiles`). Can be an empty list to specify none. If this property does not exist, then the executable is used to program the device |
 | machine | string | Both | Machine Type Selection - used for QEMU server type |

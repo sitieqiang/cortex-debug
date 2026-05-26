@@ -9,16 +9,25 @@ interface SaveVarState {
     expanded: boolean;
     value: string;
     children: LiveVariableNode[] | undefined;
+    childStart: number;
+    hasMoreChildren: boolean;
 }
 
 interface SaveVarStateMap {
     [name: string]: SaveVarState;
 }
 export class LiveVariableNode extends BaseNode {
+    private static readonly defaultMaxVisibleChildren = 128;
+    private static readonly defaultPageSize = 64;
+    private static maxVisibleChildren = LiveVariableNode.defaultMaxVisibleChildren;
+    private static pageSize = LiveVariableNode.defaultPageSize;
     protected session: vscode.DebugSession | undefined;        // This is transient
     protected children: LiveVariableNode[] | undefined;
     protected prevValue: string = '';
     protected address: string = '';    // Memory address of the variable
+    private childStart = 0;
+    private hasMoreChildren = false;
+    private forwardPagingDisabled = false;
     constructor(
         parent: LiveVariableNode | undefined,
         protected name: string,
@@ -49,16 +58,56 @@ export class LiveVariableNode extends BaseNode {
         return this.address;
     }
 
+    public static configurePaging(maxVisibleChildren: number, pageSize: number): void {
+        const maxVisible = Math.max(1, Math.floor(maxVisibleChildren || LiveVariableNode.defaultMaxVisibleChildren));
+        const page = Math.max(1, Math.floor(pageSize || LiveVariableNode.defaultPageSize));
+        LiveVariableNode.maxVisibleChildren = maxVisible;
+        LiveVariableNode.pageSize = Math.min(page, maxVisible);
+    }
+
+    private static debugPaging(message: string): void {
+        console.error(`[DebugLiveWatchPaging] ${new Date().toISOString()} ${message}`);
+    }
+
+    private debugPath(): string {
+        if (!this.parent) {
+            return '<root>';
+        }
+        const parent = this.parent as LiveVariableNode;
+        const parentPath = parent.parent ? parent.debugPath() : '';
+        return parentPath ? `${parentPath}.${this.name}` : this.name;
+    }
+
+    private static describeVariables(variables: DebugProtocol.Variable[]): string {
+        if (!variables.length) {
+            return 'first=<none> last=<none>';
+        }
+        const first = variables[0];
+        const last = variables[variables.length - 1];
+        return `first=${first.name}/${first.variablesReference ?? 0} last=${last.name}/${last.variablesReference ?? 0}`;
+    }
+
     public getChildren(): LiveVariableNode[] {
         if (!this.parent && (!this.children || !this.children.length)) {
             return [new LiveVariableNodeMsg(this)];
         }
 
-        const ret = [...(this.children ?? [])];
+        const ret: LiveVariableNode[] = [];
+        if (this.childStart > 0) {
+            ret.push(new LiveVariableNodeLoadPage(this, 'previous'));
+        }
+        ret.push(...(this.children ?? []));
+        if (this.hasMoreChildren) {
+            ret.push(new LiveVariableNodeLoadPage(this, 'more'));
+        }
         if (!this.parent && !this.session) {
             ret.push(new LiveVariableNodeMsg(this, false));
         }
         return ret;
+    }
+
+    public hasWatchExpressions(): boolean {
+        return !!this.children?.length;
     }
 
     public isRootChild(): boolean {
@@ -87,7 +136,7 @@ export class LiveVariableNode extends BaseNode {
 
     public getTreeItem(): TreeItem | Promise<TreeItem> {
         const state = this.variablesReference || (this.children?.length > 0)
-            ? (this.children?.length > 0
+            ? (this.expanded
                     ? TreeItemCollapsibleState.Expanded
                     : TreeItemCollapsibleState.Collapsed
                 )
@@ -194,6 +243,9 @@ export class LiveVariableNode extends BaseNode {
         if (valuesToo) {
             this.value = this.type = this.prevValue = this.address = '';
             this.variablesReference = 0;
+            this.hasMoreChildren = false;
+            this.childStart = 0;
+            this.forwardPagingDisabled = false;
         }
         for (const child of this.children || []) {
             child.reset(valuesToo);
@@ -206,28 +258,64 @@ export class LiveVariableNode extends BaseNode {
         if (!LiveWatchTreeProvider.session || (this.session !== LiveWatchTreeProvider.session)) {
             resolve();
         } else if (this.expanded && (this.variablesReference > 0)) {
-            // TODO: Implement limits on number of children in adapter and then here
-            // const start = this.children?.length ?? 0;
+            const requestedCount = LiveVariableNode.maxVisibleChildren + 1;
+            const requestedStart = this.childStart;
+            const shouldLogPaging = requestedStart > 0 || this.hasMoreChildren || this.forwardPagingDisabled;
+            if (shouldLogPaging) {
+                LiveVariableNode.debugPaging(`request node=${this.debugPath()} ref=${this.variablesReference}`
+                    + ` start=${requestedStart} count=${requestedCount} maxVisible=${LiveVariableNode.maxVisibleChildren}`
+                    + ` pageSize=${LiveVariableNode.pageSize} hasMoreBefore=${this.hasMoreChildren}`
+                    + ` forwardDisabled=${this.forwardPagingDisabled}`);
+            }
             const varg: DebugProtocol.VariablesArguments = {
-                variablesReference: this.variablesReference
-                // start: start,
-                // count: 32
-                // filter: this.namedVariables > 0 ? 'named' : 'indexed'
+                variablesReference: this.variablesReference,
+                start: requestedStart,
+                count: requestedCount
             };
             const oldStateMap: SaveVarStateMap = {};
             for (const child of this.children ?? []) {
                 oldStateMap[child.name] = {
                     expanded: child.expanded,
                     value: child.value,
-                    children: child.children
+                    children: child.children,
+                    childStart: child.childStart,
+                    hasMoreChildren: child.hasMoreChildren
                 };
             }
             this.session.customRequest('liveVariables', varg).then((result) => {
-                if (!result?.variables?.length) {
+                const variables = result?.variables ?? [];
+                const totalChildren = typeof result?.totalChildren === 'number' ? result.totalChildren : '<none>';
+                const shouldLogResult = shouldLogPaging
+                    || variables.length >= LiveVariableNode.maxVisibleChildren
+                    || !!result?.hasMore;
+                if (shouldLogResult) {
+                    LiveVariableNode.debugPaging(`response node=${this.debugPath()} requestedStart=${requestedStart}`
+                        + ` currentStart=${this.childStart} returned=${variables.length} resultHasMore=${!!result?.hasMore}`
+                        + ` totalChildren=${totalChildren} ${LiveVariableNode.describeVariables(variables)}`);
+                }
+                if (!variables.length && this.childStart > 0) {
+                    LiveVariableNode.debugPaging(`empty-page node=${this.debugPath()} requestedStart=${requestedStart}`
+                        + ` rollbackTo=${Math.max(0, this.childStart - LiveVariableNode.pageSize)}`);
+                    this.childStart = Math.max(0, this.childStart - LiveVariableNode.pageSize);
+                    this.forwardPagingDisabled = true;
+                    this.refreshChildren(resolve);
+                    return;
+                }
+                const canProbeForward = this.childStart > 0;
+                this.hasMoreChildren = variables.length > 0
+                    && !this.forwardPagingDisabled
+                    && (variables.length >= LiveVariableNode.maxVisibleChildren || canProbeForward || !!result?.hasMore);
+                const visibleVariables = variables.slice(0, LiveVariableNode.maxVisibleChildren);
+                if (shouldLogResult) {
+                    LiveVariableNode.debugPaging(`decision node=${this.debugPath()} childStart=${this.childStart}`
+                        + ` visible=${visibleVariables.length}/${variables.length} hasMoreAfter=${this.hasMoreChildren}`
+                        + ` forwardDisabled=${this.forwardPagingDisabled}`);
+                }
+                if (!visibleVariables.length) {
                     this.children = undefined;
                 } else {
                     this.children = [];
-                    for (const variable of result.variables ?? []) {
+                    for (const variable of visibleVariables) {
                         const ch = new LiveVariableNode(
                             this,
                             variable.name,
@@ -241,6 +329,9 @@ export class LiveVariableNode extends BaseNode {
                             ch.expanded = oldState.expanded && (ch.variablesReference > 0);
                             ch.prevValue = oldState.value;
                             ch.children = oldState.children;     // These will get refreshed later
+                            ch.childStart = oldState.childStart;
+                            ch.hasMoreChildren = oldState.hasMoreChildren;
+                            ch.forwardPagingDisabled = false;
                         }
                         ch.session = this.session;
                         this.children.push(ch);
@@ -259,6 +350,9 @@ export class LiveVariableNode extends BaseNode {
                     resolve();
                 });
             }, (e) => {
+                if (shouldLogPaging) {
+                    LiveVariableNode.debugPaging(`error node=${this.debugPath()} requestedStart=${requestedStart} error=${e}`);
+                }
                 resolve();
             });
         } else {
@@ -298,6 +392,9 @@ export class LiveVariableNode extends BaseNode {
                         this.address = result.address || '';
                         if (oldType !== this.type) {
                             this.children = this.variablesReference ? [] : undefined;
+                            this.childStart = 0;
+                            this.hasMoreChildren = false;
+                            this.forwardPagingDisabled = false;
                         }
                         this.refreshChildren(resolve);
                     } else {
@@ -321,6 +418,55 @@ export class LiveVariableNode extends BaseNode {
                 this.refreshChildren(resolve);
             }
         });
+    }
+
+    public loadMoreChildren(): Promise<void> {
+        return new Promise<void>((resolve) => {
+            const before = this.childStart;
+            LiveVariableNode.debugPaging(`click-load-more node=${this.debugPath()} before=${before}`
+                + ` pageSize=${LiveVariableNode.pageSize} maxVisible=${LiveVariableNode.maxVisibleChildren}`
+                + ` hasMoreBefore=${this.hasMoreChildren} forwardDisabled=${this.forwardPagingDisabled}`);
+            if (this.hasMoreChildren) {
+                this.childStart += LiveVariableNode.pageSize;
+                this.forwardPagingDisabled = false;
+            }
+            LiveVariableNode.debugPaging(`click-load-more-applied node=${this.debugPath()} before=${before} after=${this.childStart}`
+                + ` changed=${before !== this.childStart}`);
+            this.refreshChildren(resolve);
+        });
+    }
+
+    public loadPreviousChildren(): Promise<void> {
+        return new Promise<void>((resolve) => {
+            const before = this.childStart;
+            LiveVariableNode.debugPaging(`click-load-previous node=${this.debugPath()} before=${before}`
+                + ` pageSize=${LiveVariableNode.pageSize} maxVisible=${LiveVariableNode.maxVisibleChildren}`);
+            this.childStart = Math.max(0, this.childStart - LiveVariableNode.pageSize);
+            this.forwardPagingDisabled = false;
+            LiveVariableNode.debugPaging(`click-load-previous-applied node=${this.debugPath()} before=${before} after=${this.childStart}`);
+            this.refreshChildren(resolve);
+        });
+    }
+
+    public collectActiveItems(variableReferences: Set<number>, expressions: Set<string>): void {
+        if (!this.parent) {
+            for (const child of this.children ?? []) {
+                child.collectActiveItems(variableReferences, expressions);
+            }
+            return;
+        }
+
+        if (this.isRootChild() && this.expr) {
+            expressions.add(this.expr);
+        }
+        if (this.variablesReference > 0) {
+            variableReferences.add(this.variablesReference);
+        }
+        if (this.expanded) {
+            for (const child of this.children ?? []) {
+                child.collectActiveItems(variableReferences, expressions);
+            }
+        }
     }
 
     public addNewExpr(expr: string): boolean {
@@ -394,6 +540,28 @@ class LiveVariableNodeMsg extends LiveVariableNode {
     }
 }
 
+class LiveVariableNodeLoadPage extends LiveVariableNode {
+    constructor(parent: LiveVariableNode, private readonly direction: 'previous' | 'more') {
+        super(parent, `load-${direction}`, '');
+    }
+
+    public getTreeItem(): TreeItem | Promise<TreeItem> {
+        const isPrevious = this.direction === 'previous';
+        const item = new TreeItem(isPrevious ? 'Load previous...' : 'Load more...', TreeItemCollapsibleState.None);
+        item.contextValue = isPrevious ? 'loadPrevious' : 'loadMore';
+        item.command = {
+            command: isPrevious ? 'cortex-debug.liveWatch.loadPrevious' : 'cortex-debug.liveWatch.loadMore',
+            title: isPrevious ? 'Load Previous' : 'Load More',
+            arguments: [this.getParent()]
+        };
+        return item;
+    }
+
+    public getChildren(): LiveVariableNode[] {
+        return [];
+    }
+}
+
 interface NodeState {
     name: string;
     expr: string;
@@ -416,11 +584,13 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
     private timeout: NodeJS.Timeout | undefined;
     private timeoutMs: number = 250;
     private isStopped = true;
+    private visible = true;
 
     protected oldState = new Map <string, vscode.TreeItemCollapsibleState>();
     constructor(private context: vscode.ExtensionContext) {
         this.variables = new LiveVariableNode(undefined, '', '');
         this.setRefreshRate();
+        this.setPagingSettings();
         this.restoreState();
         context.subscriptions.push(
             vscode.workspace.onDidChangeConfiguration(this.settingsChanged.bind(this))
@@ -448,6 +618,11 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
         if (e.affectsConfiguration('cortex-debug.liveWatchRefreshRate')) {
             this.setRefreshRate();
         }
+        if (e.affectsConfiguration('cortex-debug.liveWatchMaxVisibleChildren')
+            || e.affectsConfiguration('cortex-debug.liveWatchPageSize')) {
+            this.setPagingSettings(LiveWatchTreeProvider.session?.configuration.liveWatch as LiveWatchConfig);
+            this.fire();
+        }
     }
 
     private static defaultRefreshRate = 300;
@@ -459,6 +634,19 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
         rate = Math.max(rate, LiveWatchTreeProvider.minRefreshRate);
         rate = Math.min(rate, LiveWatchTreeProvider.maxRefreshRate);
         this.currentRefreshRate = rate;
+    }
+
+    private static defaultMaxVisibleChildren = 128;
+    private static defaultPageSize = 64;
+    private setPagingSettings(liveWatch?: LiveWatchConfig) {
+        const config = vscode.workspace.getConfiguration('cortex-debug', null);
+        let maxVisible = config.get('liveWatchMaxVisibleChildren', LiveWatchTreeProvider.defaultMaxVisibleChildren);
+        let pageSize = config.get('liveWatchPageSize', LiveWatchTreeProvider.defaultPageSize);
+        maxVisible = liveWatch?.liveWatchMaxVisibleChildren ?? liveWatch?.maxVisibleChildren ?? maxVisible;
+        pageSize = liveWatch?.liveWatchPageSize ?? liveWatch?.pageSize ?? pageSize;
+        maxVisible = Math.max(1, Math.floor(maxVisible));
+        pageSize = Math.max(1, Math.floor(pageSize));
+        LiveVariableNode.configurePaging(maxVisible, pageSize);
     }
 
     public saveState() {
@@ -478,17 +666,25 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
     public refresh(session: vscode.DebugSession, restarTimer = false): void {
         if (session && this.isSameSession(session)) {
             const restart = (elapsed: number) => {
-                if (!this.isStopped && restarTimer && LiveWatchTreeProvider.session) {
+                if (this.visible && !this.isStopped && restarTimer && LiveWatchTreeProvider.session) {
                     this.startTimer(((elapsed < 0) || (elapsed > this.timeoutMs)) ? 0 : elapsed);
                 }
             };
-            if (this.variables.getChildren().length === 0) {
+            if (!this.visible) {
+                this.killTimer();
+                return;
+            }
+            if (!this.variables.hasWatchExpressions()) {
                 restart(0);
             } else {
                 const start = Date.now();
-                // The following will update all the variables in the backend cache in bulk
+                const variableReferences = new Set<number>();
+                const expressions = new Set<string>();
+                this.variables.collectActiveItems(variableReferences, expressions);
                 session.customRequest('liveCacheRefresh', {
-                    deleteAll: false       // Delete gdb-vars?
+                    deleteAll: false,       // Delete gdb-vars?
+                    variableReferences: Array.from(variableReferences),
+                    expressions: Array.from(expressions)
                 }).then(() => {
                     this.variables.refresh(session).finally(() => {
                         const elapsed = Date.now() - start;
@@ -523,6 +719,9 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
 
     private startTimer(subtract: number = 0) {
         // console.error('Starting Timer');
+        if (!this.visible) {
+            return;
+        }
         this.killTimer();
         this.timeout = setTimeout(() => {
             this.timeout = undefined;
@@ -537,6 +736,20 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
             // console.error('Killing Timer');
             clearTimeout(this.timeout);
             this.timeout = undefined;
+        }
+    }
+
+    public setVisible(visible: boolean) {
+        if (this.visible === visible) {
+            return;
+        }
+        this.visible = visible;
+        if (!visible) {
+            this.killTimer();
+            return;
+        }
+        if (LiveWatchTreeProvider.session) {
+            this.refresh(LiveWatchTreeProvider.session, !this.isStopped);
         }
     }
 
@@ -575,10 +788,13 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
         }
         LiveWatchTreeProvider.session = session;
         this.isStopped = true;
+        this.setPagingSettings(liveWatch);
         this.variables.reset();
         const samplesPerSecond = Math.max(1, Math.min(20, liveWatch.samplesPerSecond ?? 4));
         this.timeoutMs = 1000 / samplesPerSecond;
-        this.startTimer();
+        if (this.visible) {
+            this.startTimer();
+        }
     }
 
     public debugStopped(session: vscode.DebugSession) {
@@ -599,7 +815,9 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
     public debugContinued(session: vscode.DebugSession) {
         if (this.isSameSession(session)) {
             this.isStopped = false;
-            this.startTimer();
+            if (this.visible) {
+                this.startTimer();
+            }
         }
     }
 
@@ -712,6 +930,22 @@ export class LiveWatchTreeProvider implements TreeDataProvider<LiveVariableNode>
     public expandChildren(element: LiveVariableNode) {
         if (element) {
             element.expandChildren().then(() => {
+                this.fire();
+            });
+        }
+    }
+
+    public loadMoreChildren(element: LiveVariableNode) {
+        if (element) {
+            element.loadMoreChildren().then(() => {
+                this.fire();
+            });
+        }
+    }
+
+    public loadPreviousChildren(element: LiveVariableNode) {
+        if (element) {
+            element.loadPreviousChildren().then(() => {
                 this.fire();
             });
         }
