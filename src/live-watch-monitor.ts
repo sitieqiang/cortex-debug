@@ -35,6 +35,20 @@ export class VariablesHandler {
         return `first=${describe(children[0])} last=${describe(children[children.length - 1])}`;
     }
 
+    private describeFetchProfile(children: VariableObject[]): string {
+        const profile = (children as any).profile;
+        if (!profile) {
+            return 'miProfile=<none>';
+        }
+        return `miProfile=total:${profile.totalMs} list:${profile.listMs} path:${profile.parentPathMs}`
+            + ` bulk:${profile.bulkReadMs ?? '<none>'}`
+            + ` idx:${profile.indexedAddressDerived}/${profile.indexedAddressFailed}`
+            + ` idxInfo:${profile.indexedChildAddressInfoMs}`
+            + ` perChild:${profile.perChildAddressSuccesses}/${profile.perChildAddressAttempts}`
+            + ` parentFallback:${profile.parentFallbackSuccesses}/${profile.parentFallbackAttempts}`
+            + ` noAddress:${profile.noAddress} addr:${profile.addressMs}`;
+    }
+
     public async clearCachedVars(miDebugger: MI2) {
         miDebugger.clearLiveWatchSearchIndexes();
         if (this.cachedChangeList) {
@@ -341,6 +355,7 @@ export class VariablesHandler {
                 let children: VariableObject[];
                 const childMap: { [name: string]: number } = {};
                 try {
+                    const requestStartedAt = Date.now();
                     const vars: DebugProtocol.Variable[] = [];
                     const requestedStart = args.start;
                     const requestedCount = args.count;
@@ -348,13 +363,20 @@ export class VariablesHandler {
                     if (isPagingRequest) {
                         this.pagingLog(session, `variablesChildrenRequest parentExp=${pVar.exp} parentName=${pVar.name}`
                             + ` ref=${args.variablesReference} start=${requestedStart ?? '<none>'}`
-                            + ` count=${requestedCount ?? '<none>'} numchild=${pVar.numchild} type=${pVar.type}`);
+                            + ` count=${requestedCount ?? '<none>'} numchild=${pVar.numchild} type=${pVar.type}`
+                            + ` parentAddress=${pVar.address || '<none>'}`);
                     }
+                    const cacheLookupStartedAt = Date.now();
                     children = this.getCachedChilren(pVar, requestedStart, requestedCount);
+                    const cacheLookupMs = Date.now() - cacheLookupStartedAt;
+                    const cacheHit = !!children;
+                    let fetchMs = 0;
                     if (!children) {
+                        const fetchStartedAt = Date.now();
                         children = await this.fetchChildrenPage(
-                            miDebugger, args.variablesReference, id.name, pVar.address, requestedStart, requestedCount,
+                            miDebugger, args.variablesReference, id.name, pVar.address, pVar.type, requestedStart, requestedCount,
                             isPagingRequest ? (message) => this.pagingLog(session, message) : undefined);
+                        fetchMs = Date.now() - fetchStartedAt;
                         pVar.hasMore = requestedStart !== undefined && pVar.numchild > 0
                             ? requestedStart + children.length < pVar.numchild
                             : !!(children as any).hasMore;
@@ -362,6 +384,7 @@ export class VariablesHandler {
                     }
 
                     // Map children to protocol variables
+                    const mapStartedAt = Date.now();
                     for (const child of children) {
                         if (!child.id) {
                             const varId = this.findOrCreateVariable(child);
@@ -386,6 +409,7 @@ export class VariablesHandler {
                         }
                         vars.push(child.toProtocolVariable());
                     }
+                    const mapMs = Date.now() - mapStartedAt;
 
                     response.body = {
                         variables: vars
@@ -399,6 +423,9 @@ export class VariablesHandler {
                             + ` start=${requestedStart ?? '<none>'} count=${requestedCount ?? '<none>'}`
                             + ` children=${children.length} variables=${vars.length} pVarHasMore=${pVar.hasMore}`
                             + ` totalChildren=${Number.isFinite(pVar.numchild) ? pVar.numchild : '<none>'}`
+                            + ` cacheHit=${cacheHit} cacheLookupMs=${cacheLookupMs} fetchMs=${fetchMs}`
+                            + ` mapMs=${mapMs} totalMs=${Date.now() - requestStartedAt}`
+                            + ` ${this.describeFetchProfile(children)}`
                             + ` ${this.describeChildren(children)}`);
                     }
                     session.sendResponse(response);
@@ -528,7 +555,7 @@ export class VariablesHandler {
     }
 
     private async fetchChildrenPage(
-        miDebugger: MI2, variablesReference: number, name: string, parentAddress?: string, start?: number, count?: number,
+        miDebugger: MI2, variablesReference: number, name: string, parentAddress?: string, parentType?: string, start?: number, count?: number,
         pagingLog?: (message: string) => void): Promise<VariableObject[]> {
         if (count === 0) {
             pagingLog?.(`fetchChildrenPage skipped zero-count ref=${variablesReference} name=${name} start=${start ?? '<none>'}`);
@@ -536,9 +563,14 @@ export class VariablesHandler {
         }
 
         pagingLog?.(`fetchChildrenPage direct ref=${variablesReference} name=${name} start=${start ?? '<none>'} count=${count ?? '<none>'}`);
-        let children = await miDebugger.varListChildren(variablesReference, name, true, start, count, parentAddress);
+        const pageStartedAt = Date.now();
+        const directStartedAt = Date.now();
+        let children = await miDebugger.varListChildren(variablesReference, name, true, start, count, parentAddress, parentType);
+        const directMs = Date.now() - directStartedAt;
         pagingLog?.(`fetchChildrenPage directResult ref=${variablesReference} name=${name} start=${start ?? '<none>'}`
             + ` count=${count ?? '<none>'} returned=${children.length} gdbHasMore=${!!(children as any).hasMore}`
+            + ` directMs=${directMs} totalMs=${Date.now() - pageStartedAt}`
+            + ` ${this.describeFetchProfile(children)}`
             + ` ${this.describeChildren(children)}`);
         if (children.length || start === undefined || start <= 0 || count === undefined || count <= 1) {
             return children;
@@ -549,11 +581,15 @@ export class VariablesHandler {
         let low = 1;
         let high = count - 1;
         let best: VariableObject[] = [];
+        let trialCount = 0;
+        const fallbackStartedAt = Date.now();
         while (low <= high) {
             const mid = Math.floor((low + high) / 2);
-            const trial = await miDebugger.varListChildren(variablesReference, name, true, start, mid, parentAddress);
+            const trialStartedAt = Date.now();
+            const trial = await miDebugger.varListChildren(variablesReference, name, true, start, mid, parentAddress, parentType);
+            trialCount++;
             pagingLog?.(`fetchChildrenPage trial ref=${variablesReference} name=${name} start=${start}`
-                + ` count=${mid} returned=${trial.length}`);
+                + ` count=${mid} returned=${trial.length} trialMs=${Date.now() - trialStartedAt}`);
             if (trial.length) {
                 best = trial;
                 low = mid + 1;
@@ -564,7 +600,9 @@ export class VariablesHandler {
         children = best;
         (children as any).hasMore = false;
         pagingLog?.(`fetchChildrenPage fallbackResult ref=${variablesReference} name=${name} start=${start}`
-            + ` requestedCount=${count} returned=${children.length} ${this.describeChildren(children)}`);
+            + ` requestedCount=${count} returned=${children.length} trials=${trialCount}`
+            + ` fallbackMs=${Date.now() - fallbackStartedAt} totalMs=${Date.now() - pageStartedAt}`
+            + ` ${this.describeChildren(children)}`);
         return children;
     }
 }

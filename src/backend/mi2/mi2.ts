@@ -32,6 +32,13 @@ interface LiveWatchSearchIndex {
     scanned: number;
 }
 
+interface LiveWatchScalarArrayInfo {
+    elementType: string;
+    elementSize: number;
+    signed: boolean;
+    totalChildren: number;
+}
+
 export function parseReadMemResults(node: MINode): ReadMemResults {
     const startAddress = node.resultRecords.results[0][1][0][0][1];
     const endAddress = node.resultRecords.results[0][1][0][2][1];
@@ -993,13 +1000,182 @@ export class MI2 extends EventEmitter implements IBackend {
         return this.sendCommand(`var-evaluate-expression ${name}`);
     }
 
+    private parseLiveWatchAddress(value?: string): number | undefined {
+        const match = value ? /^0x[0-9a-f]+/i.exec(value) : undefined;
+        if (!match) {
+            return undefined;
+        }
+        const parsed = parseInt(match[0], 16);
+        return Number.isFinite(parsed) ? parsed : undefined;
+    }
+
+    private getScalarArrayInfo(type?: string): LiveWatchScalarArrayInfo | undefined {
+        const match = type?.trim().replace(/\s+/g, ' ').match(/^(.+?) \[(\d+)\]$/);
+        if (!match || match[1].includes('[')) {
+            return undefined;
+        }
+
+        const elementType = match[1]
+            .replace(/\b(const|volatile|__IO|__I|__O)\b/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const totalChildren = parseInt(match[2], 10);
+        if (!elementType || !Number.isFinite(totalChildren) || totalChildren <= 0) {
+            return undefined;
+        }
+
+        const normalized = elementType.toLowerCase();
+        const aliases: { [name: string]: { elementSize: number; signed: boolean } } = {
+            u8: { elementSize: 1, signed: false },
+            uint8_t: { elementSize: 1, signed: false },
+            __uint8_t: { elementSize: 1, signed: false },
+            'unsigned char': { elementSize: 1, signed: false },
+            int8_t: { elementSize: 1, signed: true },
+            __int8_t: { elementSize: 1, signed: true },
+            s8: { elementSize: 1, signed: true },
+            'signed char': { elementSize: 1, signed: true },
+            u16: { elementSize: 2, signed: false },
+            uint16_t: { elementSize: 2, signed: false },
+            __uint16_t: { elementSize: 2, signed: false },
+            int16_t: { elementSize: 2, signed: true },
+            __int16_t: { elementSize: 2, signed: true },
+            s16: { elementSize: 2, signed: true },
+            u32: { elementSize: 4, signed: false },
+            uint32_t: { elementSize: 4, signed: false },
+            __uint32_t: { elementSize: 4, signed: false },
+            int32_t: { elementSize: 4, signed: true },
+            __int32_t: { elementSize: 4, signed: true },
+            s32: { elementSize: 4, signed: true },
+            u64: { elementSize: 8, signed: false },
+            uint64_t: { elementSize: 8, signed: false },
+            __uint64_t: { elementSize: 8, signed: false },
+            int64_t: { elementSize: 8, signed: true },
+            __int64_t: { elementSize: 8, signed: true },
+            s64: { elementSize: 8, signed: true },
+        };
+        const info = aliases[normalized];
+        if (!info) {
+            return undefined;
+        }
+
+        return {
+            elementType,
+            elementSize: info.elementSize,
+            signed: info.signed,
+            totalChildren
+        };
+    }
+
+    private readScalarArrayValue(data: Buffer, offset: number, elementSize: number, signed: boolean): string {
+        switch (elementSize) {
+            case 1:
+                return (signed ? data.readInt8(offset) : data.readUInt8(offset)).toString();
+            case 2:
+                return (signed ? data.readInt16LE(offset) : data.readUInt16LE(offset)).toString();
+            case 4:
+                return (signed ? data.readInt32LE(offset) : data.readUInt32LE(offset)).toString();
+            case 8:
+                return (signed ? data.readBigInt64LE(offset) : data.readBigUInt64LE(offset)).toString();
+            default:
+                return '';
+        }
+    }
+
+    private makeSyntheticScalarArrayChild(
+        parent: number,
+        parentName: string,
+        index: number,
+        address: string,
+        info: LiveWatchScalarArrayInfo,
+        value: string): VariableObject {
+        return new VariableObject(parent, [
+            ['name', `${parentName}.${index}`],
+            ['exp', index.toString(10)],
+            ['numchild', '0'],
+            ['type', info.elementType],
+            ['value', value],
+            ['thread-id', ''],
+            ['frozen', 'false'],
+            ['dynamic', 'false'],
+            ['displayhint', ''],
+            ['has_more', '0'],
+            ['addr', address]
+        ]);
+    }
+
+    private async tryReadScalarArrayChildren(
+        parent: number,
+        name: string,
+        parentAddress: string | undefined,
+        parentType: string | undefined,
+        start: number | undefined,
+        count: number | undefined,
+        logPaging: (message: string) => void): Promise<VariableObject[] | undefined> {
+        if (start === undefined || count === undefined || count <= 0) {
+            return undefined;
+        }
+
+        const info = this.getScalarArrayInfo(parentType);
+        const baseAddress = this.parseLiveWatchAddress(parentAddress);
+        if (!info || baseAddress === undefined) {
+            return undefined;
+        }
+
+        const firstIndex = Math.max(0, Math.floor(start));
+        const availableCount = Math.max(0, Math.min(Math.floor(count), info.totalChildren - firstIndex));
+        const ret: VariableObject[] = [];
+        const startedAt = Date.now();
+        let readMs = 0;
+        if (availableCount > 0) {
+            const readAddress = baseAddress + (firstIndex * info.elementSize);
+            const readLength = availableCount * info.elementSize;
+            logPaging(`mi2.varListChildren scalarArrayFastPath name=${name} type=${parentType || '<none>'}`
+                + ` start=${start} count=${count} readAddress=${hexFormat(readAddress)} readBytes=${readLength}`);
+            const readStartedAt = Date.now();
+            const memory = await this.sendCommand(`data-read-memory-bytes "${hexFormat(readAddress)}" ${readLength}`);
+            readMs = Date.now() - readStartedAt;
+            const contents = memory.result('memory[0].contents') || '';
+            const data = Buffer.from(contents, 'hex');
+            const childCount = Math.min(availableCount, Math.floor(data.length / info.elementSize));
+            for (let ix = 0; ix < childCount; ix++) {
+                const childIndex = firstIndex + ix;
+                const childAddress = baseAddress + (childIndex * info.elementSize);
+                const value = this.readScalarArrayValue(data, ix * info.elementSize, info.elementSize, info.signed);
+                ret.push(this.makeSyntheticScalarArrayChild(parent, name, childIndex, hexFormat(childAddress), info, value));
+            }
+        }
+
+        (ret as any).hasMore = firstIndex + ret.length < info.totalChildren;
+        (ret as any).profile = {
+            totalMs: Date.now() - startedAt,
+            listMs: 0,
+            parentPathMs: 0,
+            bulkReadMs: readMs,
+            indexedAddressDerived: ret.length,
+            indexedAddressFailed: 0,
+            indexedChildAddressInfoMs: 0,
+            perChildAddressAttempts: 0,
+            perChildAddressSuccesses: 0,
+            parentFallbackAttempts: 0,
+            parentFallbackSuccesses: 0,
+            noAddress: 0,
+            addressMs: 0
+        };
+        logPaging(`mi2.varListChildren scalarArrayFastPathResult name=${name} returned=${ret.length}`
+            + ` hasMore=${!!(ret as any).hasMore} readMs=${readMs} totalMs=${(ret as any).profile.totalMs}`
+            + ` first=${ret[0]?.exp ?? '<none>'}/${ret[0]?.name ?? '<none>'}`
+            + ` last=${ret[ret.length - 1]?.exp ?? '<none>'}/${ret[ret.length - 1]?.name ?? '<none>'}`);
+        return ret;
+    }
+
     public async varListChildren(
         parent: number,
         name: string,
         fetchAddresses = false,
         start?: number,
         count?: number,
-        parentAddress?: string): Promise<VariableObject[]> {
+        parentAddress?: string,
+        parentType?: string): Promise<VariableObject[]> {
         if (trace) {
             this.log('stderr', 'varListChildren');
         }
@@ -1009,6 +1185,7 @@ export class MI2 extends EventEmitter implements IBackend {
                 this.log('log', `DebugLiveWatchPaging: ${message}`);
             }
         };
+        const totalStartedAt = Date.now();
         const describeRawChildren = (items: any[]) => {
             if (!items.length) {
                 return 'first=<none> last=<none>';
@@ -1022,8 +1199,20 @@ export class MI2 extends EventEmitter implements IBackend {
         const rangeArgs = (start !== undefined && count !== undefined) ? ` ${start} ${start + count}` : '';
         logPaging(`mi2.varListChildren command name=${name} start=${start ?? '<none>'} count=${count ?? '<none>'}`
             + ` rangeArgs="${rangeArgs.trim() || '<none>'}" fetchAddresses=${fetchAddresses}`
-            + ` parentAddress=${parentAddress || '<none>'}`);
+            + ` parentAddress=${parentAddress || '<none>'} parentType=${parentType || '<none>'}`);
+        if (fetchAddresses) {
+            try {
+                const fastChildren = await this.tryReadScalarArrayChildren(parent, name, parentAddress, parentType, start, count, logPaging);
+                if (fastChildren) {
+                    return fastChildren;
+                }
+            } catch (e) {
+                logPaging(`mi2.varListChildren scalarArrayFastPathError name=${name} error=${e}`);
+            }
+        }
+        const listStartedAt = Date.now();
         const res = await this.sendCommand(`var-list-children --all-values "${name}"${rangeArgs}`);
+        const listMs = Date.now() - listStartedAt;
         const keywords = ['private', 'protected', 'public'];
         const children = res.result('children') || [];
         const omg: VariableObject[] = [];
@@ -1031,6 +1220,7 @@ export class MI2 extends EventEmitter implements IBackend {
         (omg as any).hasMore = hasMore === '1' || hasMore === 'true';
         logPaging(`mi2.varListChildren directResult name=${name} start=${start ?? '<none>'}`
             + ` count=${count ?? '<none>'} directChildren=${children.length} hasMore=${hasMore ?? '<none>'}`
+            + ` listMs=${listMs}`
             + ` ${describeRawChildren(children)}`);
         const isSyntheticChild = (child: VariableObject) => {
             return child.exp.startsWith('<anonymous ') || keywords.includes(child.exp);
@@ -1040,13 +1230,16 @@ export class MI2 extends EventEmitter implements IBackend {
             const syntheticProbeCount = keywords.length + 2;
             logPaging(`mi2.varListChildren positiveStartEmpty name=${name} start=${start}`
                 + ` count=${count}; probing first ${syntheticProbeCount} parent children for synthetic wrappers`);
+            const probeStartedAt = Date.now();
             const probe = await this.sendCommand(`var-list-children --all-values "${name}" 0 ${syntheticProbeCount}`);
+            const probeMs = Date.now() - probeStartedAt;
             const probeChildren = (probe.result('children') || [])
                 .map((item) => new VariableObject(parent, item[1]));
             const syntheticChildren = probeChildren.filter(isSyntheticChild);
             const probeHasMore = probe.result('has_more');
             logPaging(`mi2.varListChildren syntheticProbe name=${name} probeChildren=${probeChildren.length}`
                 + ` syntheticChildren=${syntheticChildren.length} probeHasMore=${probeHasMore ?? '<none>'}`
+                + ` probeMs=${probeMs}`
                 + ` wrappers=${syntheticChildren.map((child) => `${child.exp}/${child.name}/numchild=${child.numchild}`).join(',') || '<none>'}`);
 
             if (syntheticChildren.length
@@ -1062,7 +1255,11 @@ export class MI2 extends EventEmitter implements IBackend {
                     }
                     logPaging(`mi2.varListChildren syntheticNested name=${name} wrapper=${child.exp}/${child.name}`
                         + ` nestedStart=${nestedStart} nestedCount=${nestedCount}`);
+                    const nestedStartedAt = Date.now();
                     const nested = await this.varListChildren(parent, child.name, fetchAddresses, nestedStart, nestedCount);
+                    const nestedMs = Date.now() - nestedStartedAt;
+                    logPaging(`mi2.varListChildren syntheticNestedResult name=${name} wrapper=${child.exp}/${child.name}`
+                        + ` returned=${nested.length} nestedMs=${nestedMs}`);
                     (omg as any).hasMore = (omg as any).hasMore || !!(nested as any).hasMore;
                     omg.push(...nested);
                     nestedCount -= nested.length;
@@ -1081,22 +1278,20 @@ export class MI2 extends EventEmitter implements IBackend {
         // GDB's var-info-path-expression is buggy for bitfield children in struct arrays,
         // but the parent's path expression is reliable. We use it to construct child paths.
         let parentPath: string | null = null;
+        let parentPathMs = 0;
         if (fetchAddresses) {
+            const parentPathStartedAt = Date.now();
             try {
                 const parentPathExpr = await this.sendCommand(`var-info-path-expression "${name}"`);
                 parentPath = parentPathExpr.result('path_expr');
             } catch (e) {
                 // Parent path not available, address fetching will be skipped
+            } finally {
+                parentPathMs = Date.now() - parentPathStartedAt;
             }
+            logPaging(`mi2.varListChildren parentPath name=${name} available=${!!parentPath}`
+                + ` parentPathMs=${parentPathMs} path=${parentPath || '<none>'}`);
         }
-        const parseAddress = (value?: string): number | undefined => {
-            const match = value ? /^0x[0-9a-f]+/i.exec(value) : undefined;
-            if (!match) {
-                return undefined;
-            }
-            const parsed = parseInt(match[0], 16);
-            return Number.isFinite(parsed) ? parsed : undefined;
-        };
         const parseInteger = (value?: string): number | undefined => {
             if (!value) {
                 return undefined;
@@ -1107,32 +1302,56 @@ export class MI2 extends EventEmitter implements IBackend {
         let indexedChildAddressBase: number | undefined;
         let indexedChildElementSize: number | undefined;
         let indexedChildAddressResolved = false;
+        let indexedChildAddressInfoMs = 0;
+        let indexedAddressDerived = 0;
+        let indexedAddressFailed = 0;
+        let perChildAddressAttempts = 0;
+        let perChildAddressSuccesses = 0;
+        let parentFallbackAttempts = 0;
+        let parentFallbackSuccesses = 0;
+        let addressMs = 0;
+        let noAddress = 0;
+        let indexedAddressBaseSource = '<none>';
         const getIndexedChildAddress = async (index: number): Promise<string> => {
             if (!parentPath) {
                 return '';
             }
             if (!indexedChildAddressResolved) {
+                const indexedInfoStartedAt = Date.now();
                 indexedChildAddressResolved = true;
-                indexedChildAddressBase = parseAddress(parentAddress);
+                indexedChildAddressBase = this.parseLiveWatchAddress(parentAddress);
+                if (indexedChildAddressBase !== undefined) {
+                    indexedAddressBaseSource = 'parentAddress';
+                }
                 if (indexedChildAddressBase === undefined) {
                     try {
+                        const baseStartedAt = Date.now();
                         const addrResp = await this.sendCommand(`data-evaluate-expression "&(${parentPath})"`);
-                        indexedChildAddressBase = parseAddress(addrResp.result('value'));
+                        addressMs += Date.now() - baseStartedAt;
+                        indexedChildAddressBase = this.parseLiveWatchAddress(addrResp.result('value'));
+                        if (indexedChildAddressBase !== undefined) {
+                            indexedAddressBaseSource = 'gdb-parent';
+                        }
                     } catch (e) {
                         // Fall back to per-child address evaluation below.
                     }
                 }
                 try {
+                    const sizeStartedAt = Date.now();
                     const sizeResp = await this.sendCommand(`data-evaluate-expression "sizeof((${parentPath})[0])"`);
+                    addressMs += Date.now() - sizeStartedAt;
                     indexedChildElementSize = parseInteger(sizeResp.result('value'));
                 } catch (e) {
                     // Fall back to per-child address evaluation below.
                 }
+                indexedChildAddressInfoMs = Date.now() - indexedInfoStartedAt;
                 logPaging(`mi2.varListChildren indexedAddressInfo name=${name}`
                     + ` base=${indexedChildAddressBase !== undefined ? hexFormat(indexedChildAddressBase) : '<none>'}`
-                    + ` elementSize=${indexedChildElementSize ?? '<none>'}`);
+                    + ` baseSource=${indexedAddressBaseSource} elementSize=${indexedChildElementSize ?? '<none>'}`
+                    + ` infoMs=${indexedChildAddressInfoMs}`);
             }
             if (indexedChildAddressBase === undefined || indexedChildElementSize === undefined) {
+                indexedAddressFailed++;
                 return '';
             }
             return hexFormat(indexedChildAddressBase + (index * indexedChildElementSize));
@@ -1145,13 +1364,19 @@ export class MI2 extends EventEmitter implements IBackend {
                 logPaging(`mi2.varListChildren expandAnonymous parent=${name} child=${child.exp}/${child.name}`
                     + ` parentStart=${start ?? '<none>'} nestedStart=${nestedStart ?? '<none>'}`
                     + ` count=${count ?? '<none>'} numchild=${child.numchild}`);
+                const nestedStartedAt = Date.now();
                 const nested = await this.varListChildren(parent, child.name, fetchAddresses, nestedStart, count);
+                logPaging(`mi2.varListChildren expandAnonymousResult parent=${name} child=${child.exp}/${child.name}`
+                    + ` returned=${nested.length} nestedMs=${Date.now() - nestedStartedAt}`);
                 (omg as any).hasMore = (omg as any).hasMore || !!(nested as any).hasMore;
                 omg.push(...nested);
             } else if (keywords.find((x) => x === child.exp)) {
                 logPaging(`mi2.varListChildren expandKeyword parent=${name} child=${child.exp}/${child.name}`
                     + ` start=${start ?? '<none>'} count=${count ?? '<none>'} numchild=${child.numchild}`);
+                const nestedStartedAt = Date.now();
                 const nested = await this.varListChildren(parent, child.name, fetchAddresses, start, count);
+                logPaging(`mi2.varListChildren expandKeywordResult parent=${name} child=${child.exp}/${child.name}`
+                    + ` returned=${nested.length} nestedMs=${Date.now() - nestedStartedAt}`);
                 (omg as any).hasMore = (omg as any).hasMore || !!(nested as any).hasMore;
                 omg.push(...nested);
             } else {
@@ -1163,36 +1388,70 @@ export class MI2 extends EventEmitter implements IBackend {
                     const isArrayIndex = /^\d+$/.test(child.exp);
                     if (isArrayIndex) {
                         child.address = await getIndexedChildAddress(parseInt(child.exp, 10));
+                        if (child.address) {
+                            indexedAddressDerived++;
+                        }
                     }
                     const childFullPath = isArrayIndex
                         ? `(${parentPath})[${child.exp}]`
                         : `(${parentPath}).${child.exp}`;
                     if (!child.address) {
+                        perChildAddressAttempts++;
+                        const perChildAddressStartedAt = Date.now();
                         try {
                             const addrResp = await this.sendCommand(`data-evaluate-expression "&(${childFullPath})"`);
                             const addrValue = addrResp.result('value');
                             if (addrValue && addrValue.startsWith('0x')) {
                                 child.address = addrValue;
+                                perChildAddressSuccesses++;
                             }
                         } catch (e) {
                             // For bitfields, & is invalid in C. Use parent's address as the container address.
                             // The bitfield offset within the container is resolved separately via getStructTypeInfo.
+                            parentFallbackAttempts++;
                             try {
                                 const addrResp = await this.sendCommand(`data-evaluate-expression "&(${parentPath})"`);
                                 const addrValue = addrResp.result('value');
                                 if (addrValue && addrValue.startsWith('0x')) {
                                     child.address = addrValue;
+                                    parentFallbackSuccesses++;
                                 }
                             } catch (e2) {
                                 // Silently ignore
                             }
+                        } finally {
+                            addressMs += Date.now() - perChildAddressStartedAt;
                         }
+                    }
+                    if (!child.address) {
+                        noAddress++;
                     }
                 }
                 omg.push(child);
             }
         }
+        const profile = {
+            totalMs: Date.now() - totalStartedAt,
+            listMs,
+            parentPathMs,
+            indexedAddressDerived,
+            indexedAddressFailed,
+            indexedChildAddressInfoMs,
+            perChildAddressAttempts,
+            perChildAddressSuccesses,
+            parentFallbackAttempts,
+            parentFallbackSuccesses,
+            noAddress,
+            addressMs
+        };
+        (omg as any).profile = profile;
         logPaging(`mi2.varListChildren final name=${name} returned=${omg.length} hasMore=${!!(omg as any).hasMore}`
+            + ` totalMs=${profile.totalMs} listMs=${profile.listMs} parentPathMs=${profile.parentPathMs}`
+            + ` indexedDerived=${profile.indexedAddressDerived} indexedFailed=${profile.indexedAddressFailed}`
+            + ` indexedInfoMs=${profile.indexedChildAddressInfoMs}`
+            + ` perChildAddr=${profile.perChildAddressSuccesses}/${profile.perChildAddressAttempts}`
+            + ` parentFallback=${profile.parentFallbackSuccesses}/${profile.parentFallbackAttempts} noAddress=${profile.noAddress}`
+            + ` addressMs=${profile.addressMs}`
             + ` first=${omg[0]?.exp ?? '<none>'}/${omg[0]?.name ?? '<none>'}`
             + ` last=${omg[omg.length - 1]?.exp ?? '<none>'}/${omg[omg.length - 1]?.name ?? '<none>'}`);
         return omg;

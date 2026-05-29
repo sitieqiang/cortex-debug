@@ -296,6 +296,9 @@ export class LiveVariableNode extends BaseNode {
                 start: requestedStart,
                 count: requestedCount
             };
+            const requestStartedAt = Date.now();
+            let backendRequestMs = 0;
+            let nodeBuildMs = 0;
             const oldStateMap: SaveVarStateMap = {};
             for (const child of this.children ?? []) {
                 oldStateMap[child.name] = {
@@ -309,6 +312,7 @@ export class LiveVariableNode extends BaseNode {
                 };
             }
             this.session.customRequest('liveVariables', varg).then((result) => {
+                backendRequestMs = Date.now() - requestStartedAt;
                 const variables = result?.variables ?? [];
                 const totalChildren = typeof result?.totalChildren === 'number' ? result.totalChildren : '<none>';
                 const shouldLogResult = shouldLogPaging
@@ -317,7 +321,8 @@ export class LiveVariableNode extends BaseNode {
                 if (shouldLogResult) {
                     LiveVariableNode.debugPaging(`response node=${this.debugPath()} requestedStart=${requestedStart}`
                         + ` currentStart=${this.childStart} returned=${variables.length} resultHasMore=${!!result?.hasMore}`
-                        + ` totalChildren=${totalChildren} ${LiveVariableNode.describeVariables(variables)}`);
+                        + ` totalChildren=${totalChildren} backendRequestMs=${backendRequestMs}`
+                        + ` ${LiveVariableNode.describeVariables(variables)}`);
                 }
                 if (!variables.length && this.childStart > 0) {
                     LiveVariableNode.debugPaging(`empty-page node=${this.debugPath()} requestedStart=${requestedStart}`
@@ -337,6 +342,7 @@ export class LiveVariableNode extends BaseNode {
                         + ` visible=${visibleVariables.length}/${variables.length} hasMoreAfter=${this.hasMoreChildren}`
                         + ` forwardDisabled=${this.forwardPagingDisabled}`);
                 }
+                const nodeBuildStartedAt = Date.now();
                 if (!visibleVariables.length) {
                     this.children = undefined;
                 } else {
@@ -365,6 +371,7 @@ export class LiveVariableNode extends BaseNode {
                         this.children.push(ch);
                     }
                 }
+                nodeBuildMs = Date.now() - nodeBuildStartedAt;
                 const promises = [];
                 for (const child of this.children ?? []) {
                     if (child.expanded) {
@@ -375,11 +382,17 @@ export class LiveVariableNode extends BaseNode {
                     }
                 }
                 Promise.allSettled(promises).finally(() => {
+                    if (shouldLogResult) {
+                        LiveVariableNode.debugPaging(`complete node=${this.debugPath()} requestedStart=${requestedStart}`
+                            + ` backendRequestMs=${backendRequestMs} nodeBuildMs=${nodeBuildMs}`
+                            + ` expandedRefreshes=${promises.length} totalMs=${Date.now() - requestStartedAt}`);
+                    }
                     resolve();
                 });
             }, (e) => {
                 if (shouldLogPaging) {
-                    LiveVariableNode.debugPaging(`error node=${this.debugPath()} requestedStart=${requestedStart} error=${e}`);
+                    LiveVariableNode.debugPaging(`error node=${this.debugPath()} requestedStart=${requestedStart}`
+                        + ` elapsedMs=${Date.now() - requestStartedAt} error=${e}`);
                 }
                 resolve();
             });

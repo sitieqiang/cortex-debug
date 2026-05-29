@@ -9,3 +9,4 @@ out
 /dist
 /tmp
 binary_modules/electron*
+.gitnexus
