@@ -353,7 +353,7 @@ export class VariablesHandler {
                     children = this.getCachedChilren(pVar, requestedStart, requestedCount);
                     if (!children) {
                         children = await this.fetchChildrenPage(
-                            miDebugger, args.variablesReference, id.name, requestedStart, requestedCount,
+                            miDebugger, args.variablesReference, id.name, pVar.address, requestedStart, requestedCount,
                             isPagingRequest ? (message) => this.pagingLog(session, message) : undefined);
                         pVar.hasMore = requestedStart !== undefined && pVar.numchild > 0
                             ? requestedStart + children.length < pVar.numchild
@@ -528,7 +528,7 @@ export class VariablesHandler {
     }
 
     private async fetchChildrenPage(
-        miDebugger: MI2, variablesReference: number, name: string, start?: number, count?: number,
+        miDebugger: MI2, variablesReference: number, name: string, parentAddress?: string, start?: number, count?: number,
         pagingLog?: (message: string) => void): Promise<VariableObject[]> {
         if (count === 0) {
             pagingLog?.(`fetchChildrenPage skipped zero-count ref=${variablesReference} name=${name} start=${start ?? '<none>'}`);
@@ -536,7 +536,7 @@ export class VariablesHandler {
         }
 
         pagingLog?.(`fetchChildrenPage direct ref=${variablesReference} name=${name} start=${start ?? '<none>'} count=${count ?? '<none>'}`);
-        let children = await miDebugger.varListChildren(variablesReference, name, true, start, count);
+        let children = await miDebugger.varListChildren(variablesReference, name, true, start, count, parentAddress);
         pagingLog?.(`fetchChildrenPage directResult ref=${variablesReference} name=${name} start=${start ?? '<none>'}`
             + ` count=${count ?? '<none>'} returned=${children.length} gdbHasMore=${!!(children as any).hasMore}`
             + ` ${this.describeChildren(children)}`);
@@ -551,7 +551,7 @@ export class VariablesHandler {
         let best: VariableObject[] = [];
         while (low <= high) {
             const mid = Math.floor((low + high) / 2);
-            const trial = await miDebugger.varListChildren(variablesReference, name, true, start, mid);
+            const trial = await miDebugger.varListChildren(variablesReference, name, true, start, mid, parentAddress);
             pagingLog?.(`fetchChildrenPage trial ref=${variablesReference} name=${name} start=${start}`
                 + ` count=${mid} returned=${trial.length}`);
             if (trial.length) {

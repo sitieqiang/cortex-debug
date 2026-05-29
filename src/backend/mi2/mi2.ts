@@ -993,7 +993,13 @@ export class MI2 extends EventEmitter implements IBackend {
         return this.sendCommand(`var-evaluate-expression ${name}`);
     }
 
-    public async varListChildren(parent: number, name: string, fetchAddresses = false, start?: number, count?: number): Promise<VariableObject[]> {
+    public async varListChildren(
+        parent: number,
+        name: string,
+        fetchAddresses = false,
+        start?: number,
+        count?: number,
+        parentAddress?: string): Promise<VariableObject[]> {
         if (trace) {
             this.log('stderr', 'varListChildren');
         }
@@ -1015,7 +1021,8 @@ export class MI2 extends EventEmitter implements IBackend {
         };
         const rangeArgs = (start !== undefined && count !== undefined) ? ` ${start} ${start + count}` : '';
         logPaging(`mi2.varListChildren command name=${name} start=${start ?? '<none>'} count=${count ?? '<none>'}`
-            + ` rangeArgs="${rangeArgs.trim() || '<none>'}" fetchAddresses=${fetchAddresses}`);
+            + ` rangeArgs="${rangeArgs.trim() || '<none>'}" fetchAddresses=${fetchAddresses}`
+            + ` parentAddress=${parentAddress || '<none>'}`);
         const res = await this.sendCommand(`var-list-children --all-values "${name}"${rangeArgs}`);
         const keywords = ['private', 'protected', 'public'];
         const children = res.result('children') || [];
@@ -1082,6 +1089,54 @@ export class MI2 extends EventEmitter implements IBackend {
                 // Parent path not available, address fetching will be skipped
             }
         }
+        const parseAddress = (value?: string): number | undefined => {
+            const match = value ? /^0x[0-9a-f]+/i.exec(value) : undefined;
+            if (!match) {
+                return undefined;
+            }
+            const parsed = parseInt(match[0], 16);
+            return Number.isFinite(parsed) ? parsed : undefined;
+        };
+        const parseInteger = (value?: string): number | undefined => {
+            if (!value) {
+                return undefined;
+            }
+            const parsed = parseInt(value, 0);
+            return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+        };
+        let indexedChildAddressBase: number | undefined;
+        let indexedChildElementSize: number | undefined;
+        let indexedChildAddressResolved = false;
+        const getIndexedChildAddress = async (index: number): Promise<string> => {
+            if (!parentPath) {
+                return '';
+            }
+            if (!indexedChildAddressResolved) {
+                indexedChildAddressResolved = true;
+                indexedChildAddressBase = parseAddress(parentAddress);
+                if (indexedChildAddressBase === undefined) {
+                    try {
+                        const addrResp = await this.sendCommand(`data-evaluate-expression "&(${parentPath})"`);
+                        indexedChildAddressBase = parseAddress(addrResp.result('value'));
+                    } catch (e) {
+                        // Fall back to per-child address evaluation below.
+                    }
+                }
+                try {
+                    const sizeResp = await this.sendCommand(`data-evaluate-expression "sizeof((${parentPath})[0])"`);
+                    indexedChildElementSize = parseInteger(sizeResp.result('value'));
+                } catch (e) {
+                    // Fall back to per-child address evaluation below.
+                }
+                logPaging(`mi2.varListChildren indexedAddressInfo name=${name}`
+                    + ` base=${indexedChildAddressBase !== undefined ? hexFormat(indexedChildAddressBase) : '<none>'}`
+                    + ` elementSize=${indexedChildElementSize ?? '<none>'}`);
+            }
+            if (indexedChildAddressBase === undefined || indexedChildElementSize === undefined) {
+                return '';
+            }
+            return hexFormat(indexedChildAddressBase + (index * indexedChildElementSize));
+        };
 
         for (const item of children) {
             const child = new VariableObject(parent, item[1]);
@@ -1106,26 +1161,31 @@ export class MI2 extends EventEmitter implements IBackend {
                     // This avoids GDB's var-info-path-expression bug where bitfield children
                     // in struct arrays all resolve to the wrong (same) path expression.
                     const isArrayIndex = /^\d+$/.test(child.exp);
+                    if (isArrayIndex) {
+                        child.address = await getIndexedChildAddress(parseInt(child.exp, 10));
+                    }
                     const childFullPath = isArrayIndex
                         ? `(${parentPath})[${child.exp}]`
                         : `(${parentPath}).${child.exp}`;
-                    try {
-                        const addrResp = await this.sendCommand(`data-evaluate-expression "&(${childFullPath})"`);
-                        const addrValue = addrResp.result('value');
-                        if (addrValue && addrValue.startsWith('0x')) {
-                            child.address = addrValue;
-                        }
-                    } catch (e) {
-                        // For bitfields, & is invalid in C. Use parent's address as the container address.
-                        // The bitfield offset within the container is resolved separately via getStructTypeInfo.
+                    if (!child.address) {
                         try {
-                            const addrResp = await this.sendCommand(`data-evaluate-expression "&(${parentPath})"`);
+                            const addrResp = await this.sendCommand(`data-evaluate-expression "&(${childFullPath})"`);
                             const addrValue = addrResp.result('value');
                             if (addrValue && addrValue.startsWith('0x')) {
                                 child.address = addrValue;
                             }
-                        } catch (e2) {
-                            // Silently ignore
+                        } catch (e) {
+                            // For bitfields, & is invalid in C. Use parent's address as the container address.
+                            // The bitfield offset within the container is resolved separately via getStructTypeInfo.
+                            try {
+                                const addrResp = await this.sendCommand(`data-evaluate-expression "&(${parentPath})"`);
+                                const addrValue = addrResp.result('value');
+                                if (addrValue && addrValue.startsWith('0x')) {
+                                    child.address = addrValue;
+                                }
+                            } catch (e2) {
+                                // Silently ignore
+                            }
                         }
                     }
                 }
