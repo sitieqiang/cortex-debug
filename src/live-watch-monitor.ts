@@ -7,6 +7,8 @@ import * as crypto from 'crypto';
 import { MINode } from './backend/mi_parse';
 import { expandValue } from './backend/gdb_expansion';
 
+const enableLiveWatchPagingLog = false;
+
 export type VariableType = string | VariableObject | ExtendedVariable;
 export interface NameToVarChangeInfo {
     [name: string]: any;
@@ -22,6 +24,9 @@ export class VariablesHandler {
     ) { }
 
     private pagingLog(session: GDBDebugSession, message: string): void {
+        if (!enableLiveWatchPagingLog) {
+            return;
+        }
         session.handleMsg('log', `DebugLiveWatchPaging: ${message}\n`);
     }
 

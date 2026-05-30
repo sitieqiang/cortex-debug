@@ -12,6 +12,8 @@ import { hexFormat } from '../../frontend/utils';
 import { ADAPTER_DEBUG_MODE, GDBInterruptMode } from '../../common';
 const path = posix;
 
+const enableLiveWatchPagingLog = false;
+
 export interface ReadMemResults {
     startAddress: string;
     endAddress: string;
@@ -1181,7 +1183,7 @@ export class MI2 extends EventEmitter implements IBackend {
         }
         const shouldLogPaging = start !== undefined || count !== undefined;
         const logPaging = (message: string) => {
-            if (shouldLogPaging) {
+            if (enableLiveWatchPagingLog && shouldLogPaging) {
                 this.log('log', `DebugLiveWatchPaging: ${message}`);
             }
         };

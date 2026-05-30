@@ -39,6 +39,7 @@ interface LiveWatchSearchResult {
 export class LiveVariableNode extends BaseNode {
     private static readonly defaultMaxVisibleChildren = 64;
     private static readonly defaultPageSize = 32;
+    private static readonly enablePagingDebugLog = false;
     private static maxVisibleChildren = LiveVariableNode.defaultMaxVisibleChildren;
     private static pageSize = LiveVariableNode.defaultPageSize;
     protected session: vscode.DebugSession | undefined;        // This is transient
@@ -88,6 +89,9 @@ export class LiveVariableNode extends BaseNode {
     }
 
     private static debugPaging(message: string): void {
+        if (!LiveVariableNode.enablePagingDebugLog) {
+            return;
+        }
         console.error(`[DebugLiveWatchPaging] ${new Date().toISOString()} ${message}`);
     }
 
