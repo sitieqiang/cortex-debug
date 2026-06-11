@@ -382,6 +382,14 @@ export class GDBDebugSession extends LoggingDebugSession {
         this.sendErrorResponse(response, codeOrMessage, format, variables, dest);
     }
 
+    private nextGotoTargetId = 1;
+    private gotoTargets = new Map<number, {
+        address: string;
+        line: number;
+        column?: number;
+        label: string;
+    }>();
+
     protected initDebugger() {
         this.miDebugger.on('quit', this.quitEvent.bind(this));
         this.miDebugger.on('exited-normally', this.quitEvent.bind(this));
@@ -3853,6 +3861,38 @@ export class GDBDebugSession extends LoggingDebugSession {
         return varObjName;
     }
 
+    protected async gotoRequest(response: DebugProtocol.GotoResponse, args: DebugProtocol.GotoArguments): Promise<void> {
+        if (!this.stopped || this.miDebugger.status === 'running') {
+            this.sendErrorResponse(response, 16, 'Cannot jump to cursor while target is running');
+            return;
+        }
+
+        const target = this.gotoTargets.get(args.targetId);
+        if (!target) {
+            this.sendErrorResponse(response, 16, `Unknown goto target: ${args.targetId}`);
+            return;
+        }
+
+        if (!/^0x[0-9a-fA-F]+$/.test(target.address)) {
+            this.sendErrorResponse(response, 16, `Invalid goto target address: ${target.address}`);
+            return;
+        }
+
+        try {
+            await this.miDebugger.sendCommand(`interpreter-exec console "set $pc = ${target.address}"`);
+            this.currentThreadId = args.threadId || this.currentThreadId;
+            this.stoppedThreadId = this.currentThreadId;
+            this.continuing = false;
+            this.stopped = true;
+            this.stoppedReason = 'goto';
+            this.gotoTargets.delete(args.targetId);
+            this.sendResponse(response);
+            this.notifyStoppedConditional();
+        } catch (msg) {
+            this.sendErrorResponse(response, 16, `Could not jump to ${target.address}: ${msg ? msg : ''}`);
+        }
+    }
+
     protected async gotoTargetsRequest(response: DebugProtocol.GotoTargetsResponse, args: DebugProtocol.GotoTargetsArguments): Promise<void> {
         try {
             const brk: OurSourceBreakpoint = {
@@ -3870,13 +3910,32 @@ export class GDBDebugSession extends LoggingDebugSession {
                 this.sendErrorResponse(response, 16, `Could not jump to: ${result.message} ${args.source.path}:${args.line}`);
             } else if (!result) {
                 this.sendErrorResponse(response, 16, `Could not jump to: ${args.source.path}:${args.line}`);
+            } else if (!result.address || !/^0x[0-9a-fA-F]+$/.test(result.address)) {
+                if (result.number !== undefined) {
+                    await this.miDebugger.removeBreakpoints([result.number]);
+                    this.hwBreakpointMgr.removeBreakpoints([result.number]);
+                }
+                this.sendErrorResponse(response, 16, `Could not resolve jump target address for ${args.source.path}:${args.line}`);
             } else {
+                if (result.number !== undefined) {
+                    await this.miDebugger.removeBreakpoints([result.number]);
+                    this.hwBreakpointMgr.removeBreakpoints([result.number]);
+                }
+                const targetId = this.nextGotoTargetId++;
+                const label = `${args.source.name || path.basename(args.source.path || '')}:${result.line || args.line}`;
+                this.gotoTargets.set(targetId, {
+                    address: result.address,
+                    line: result.line || args.line,
+                    column: args.column,
+                    label: label
+                });
                 response.body = {
                     targets: [{
-                        id: result.number || 0,
-                        label: args.source.name || '',
+                        id: targetId,
+                        label: label,
                         column: args.column,
-                        line: args.line
+                        line: result.line || args.line,
+                        instructionPointerReference: result.address
                     }]
                 };
                 this.sendResponse(response);

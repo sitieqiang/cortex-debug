@@ -4,14 +4,68 @@ import { hexFormat } from '../frontend/utils';
 import { MI2, parseReadMemResults } from './mi2/mi2';
 import { MINode } from './mi_parse';
 import * as path from 'path';
-import { GDBDebugSession } from '../gdb';
+import type { GDBDebugSession } from '../gdb';
 import { DisassemblyInstruction, ConfigurationArguments, ADAPTER_DEBUG_MODE, HrTimer } from '../common';
 import { SymbolInformation, SymbolType } from '../symbols';
 import { assert } from 'console';
 import { MemoryRegion, SymbolNode } from './symbols';
 
-enum TargetArchitecture {
-    X64, X86, ARM64, ARM, XTENSA, UNKNOWN
+export enum TargetArchitecture {
+    X64, X86, ARM64, ARM, RISCV, XTENSA, UNKNOWN
+}
+
+export interface DisassemblyArchitectureSettings {
+    architecture: TargetArchitecture;
+    minInstrSize: number;
+    maxInstrSize: number;
+    instrMultiple: number;
+}
+
+export function getInstructionByteLength(opcodes: string): number {
+    const bytes = (opcodes || '').trim();
+    return bytes ? bytes.split(/\s+/g).length : 0;
+}
+
+export function instructionContainsAddress(instruction: { pvtAddress: number; pvtInstructionBytes?: string }, address: number): boolean {
+    if (instruction.pvtAddress === address) {
+        return true;
+    }
+    const byteLength = getInstructionByteLength(instruction.pvtInstructionBytes || '');
+    return (byteLength > 0) && (address >= instruction.pvtAddress) && (address < (instruction.pvtAddress + byteLength));
+}
+
+export function findInstructionIndexContainingAddress(
+    instructions: Array<{ pvtAddress: number; pvtInstructionBytes?: string }>,
+    address: number): number {
+    const len = instructions.length;
+    for (let ix = 0; ix < len; ix++) {
+        if (instructionContainsAddress(instructions[ix], address)) {
+            return ix;
+        }
+    }
+    return -1;
+}
+
+export function getDisassemblyArchitectureSettings(gdbArchitectureOutput: string): DisassemblyArchitectureSettings {
+    // Some of this copied from MIEngine. Of course nothing other Arm-32 was tested
+    for (const line of gdbArchitectureOutput.toLowerCase().split('\n')) {
+        if (line.includes('x86-64')) {
+            return { architecture: TargetArchitecture.X64, minInstrSize: 1, maxInstrSize: 26, instrMultiple: 1 };
+        } else if (line.includes('i386')) {
+            return { architecture: TargetArchitecture.X86, minInstrSize: 1, maxInstrSize: 20, instrMultiple: 1 };
+        } else if (line.includes('arm64')) {
+            return { architecture: TargetArchitecture.ARM64, minInstrSize: 2, maxInstrSize: 8, instrMultiple: 2 };
+        } else if (line.includes('aarch64')) {
+            return { architecture: TargetArchitecture.ARM64, minInstrSize: 2, maxInstrSize: 8, instrMultiple: 2 };
+        } else if (line.includes('arm')) {
+            return { architecture: TargetArchitecture.ARM, minInstrSize: 2, maxInstrSize: 4, instrMultiple: 2 };
+        } else if (line.includes('riscv') || line.includes('risc-v') || /\brv(32|64)\b/.test(line)) {
+            return { architecture: TargetArchitecture.RISCV, minInstrSize: 2, maxInstrSize: 4, instrMultiple: 2 };
+        } else if (line.includes('xtensa')) {
+            return { architecture: TargetArchitecture.XTENSA, minInstrSize: 1, maxInstrSize: 128 / 8, instrMultiple: 1 };
+        }
+    }
+    return { architecture: TargetArchitecture.UNKNOWN, minInstrSize: 1, maxInstrSize: 26, instrMultiple: 1 };
 }
 
 /*
@@ -59,7 +113,7 @@ class InstructionRange {
             // this.endAddress = Math.max(this.endAddress, last.pvtAddress + (last ? last.pvtInstructionBytes.length / 2 : 2));
             this.startAddress = this.instructions[0].pvtAddress;
             assert((last.pvtInstructionBytes.length % 3) === 2);
-            this.endAddress = last.pvtAddress + (last.pvtInstructionBytes.length + 1) / 3;
+            this.endAddress = last.pvtAddress + getInstructionByteLength(last.pvtInstructionBytes);
         }
     }
 
@@ -87,19 +141,7 @@ class InstructionRange {
     }
 
     public findInstrIndex(address: number): number {
-        const len = this.instructions.length;
-        for (let ix = 0; ix < len; ix++) {
-            const instr = this.instructions[ix];
-            if (instr.pvtAddress === address) {
-                return ix;
-            } else if (instr.pvtIsData) {
-                const endAddr = instr.pvtAddress + ((instr.pvtInstructionBytes.length + 1) / 3);
-                if ((address >= instr.pvtAddress) && (address < endAddr)) {
-                    return ix;
-                }
-            }
-        }
-        return -1;
+        return findInstructionIndexContainingAddress(this.instructions, address);
     }
 
     public findNearbyLowerInstr(address: number, thresh: number): number {
@@ -233,53 +275,15 @@ export class GdbDisassembler {
     public async setArchitecture(): Promise<void> {
         const miNode = await this.miDebugger.sendCommand('interpreter-exec console "show architecture"', false, true);
         const str = miNode.output;
-        let found = false;
-        // Some of this copied from MIEngine. Of course nothing other Arm-32 was tested
-        for (const line of str.toLowerCase().split('\n')) {
-            if (line.includes('x86-64')) {
-                this.Architecture = TargetArchitecture.X64;
-                this.minInstrSize = 1;
-                this.maxInstrSize = 26;
-                this.instrMultiple = 1;
-            } else if (line.includes('i386')) {
-                this.Architecture = TargetArchitecture.X86;
-                this.minInstrSize = 1;
-                this.maxInstrSize = 20;
-                this.instrMultiple = 1;
-            } else if (line.includes('arm64')) {
-                this.Architecture = TargetArchitecture.ARM64;
-                this.minInstrSize = 2;
-                this.maxInstrSize = 8;
-                this.instrMultiple = 2;
-            } else if (line.includes('aarch64')) {
-                this.Architecture = TargetArchitecture.ARM64;
-                this.minInstrSize = 2;
-                this.maxInstrSize = 8;
-                this.instrMultiple = 2;
-            } else if (line.includes('arm')) {
-                this.Architecture = TargetArchitecture.ARM;
-                this.minInstrSize = 2;
-                this.maxInstrSize = 4;
-                this.instrMultiple = 2;
-            } else if (line.includes('xtensa')) {
-                this.Architecture = TargetArchitecture.XTENSA;
-                this.minInstrSize = 1;
-                this.maxInstrSize = 128 / 8;    // Yes, ridiculously large due to their long instructions
-                this.instrMultiple = 1;
-            } else {
-                continue;
-            }
-            found = true;
-            break;
-        }
-        if (!found) {
+        const settings = getDisassemblyArchitectureSettings(str);
+        this.Architecture = settings.architecture;
+        this.minInstrSize = settings.minInstrSize;
+        this.maxInstrSize = settings.maxInstrSize;
+        this.instrMultiple = settings.instrMultiple;
+        if (settings.architecture === TargetArchitecture.UNKNOWN) {
             this.handleMsg('log',
                 'Warning: Unknown architecture for disassembly. Results may not be accurate at edge of memories\n'
                 + `    Gdb command "show architecture" shows "${str}"\n`);
-            this.Architecture = TargetArchitecture.UNKNOWN;
-            this.minInstrSize = 1;
-            this.maxInstrSize = 26;
-            this.instrMultiple = 1;
         } else if (this.Architecture !== TargetArchitecture.ARM) {
             this.handleMsg('log', `Info: Untested architecture for disassembly: Gdb command "show architecture" shows "${str}"\n`);
         }
@@ -423,7 +427,7 @@ export class GdbDisassembler {
                 instr.endLine = srcInfo.endLine;
             }
 
-            if (validationAddr === nAddress) {
+            if (instructionContainsAddress(instr, validationAddr)) {
                 foundIx = instructions.length;
             }
 
@@ -922,7 +926,7 @@ export class GdbDisassembler {
             for (let ix = 0; ix < instrs.length; ix++) {
                 const instr = instrs[ix];
                 if (instr.pvtInstructionBytes && !instr.pvtIsData) {
-                    const nBytes = (instr.pvtInstructionBytes.length + 1) / 3;
+                    const nBytes = getInstructionByteLength(instr.pvtInstructionBytes);
                     if ((nBytes < this.minInstrSize) || (nBytes > this.maxInstrSize)) {
                         throw new Error(`Bad/corrupted disassembly (too many/few bytes? Please report this problem ${instr.address} ${instr.instruction}`);
                     }
