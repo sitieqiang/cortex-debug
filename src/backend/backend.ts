@@ -166,8 +166,14 @@ export class VariableObject {
 
         this.curDisplayName = res.name;
         if (this.address) {
-            res['memoryReference'] = hexFormat(parseInt(this.address));
+            const addrHex = hexFormat(parseInt(this.address));
+            res['memoryReference'] = addrHex;
             res['address'] = this.address;
+            // Show the variable's own memory address in the value column so it is
+            // visible in the VS Code Variables/Watch window (memoryReference itself is not displayed).
+            if (res.value && !res.value.includes('@' + addrHex)) {
+                res.value = `${res.value} @${addrHex}`;
+            }
         }
 
         // Include bitfield information if available
@@ -190,8 +196,14 @@ export class VariableObject {
         };
         this.tryAddMemoryReference(res);
         if (this.address) {
-            res['memoryReference'] = hexFormat(parseInt(this.address));
+            const addrHex = hexFormat(parseInt(this.address));
+            res['memoryReference'] = addrHex;
             res['address'] = this.address;
+            // Show the variable's own memory address in the result so it is visible
+            // in the Watch window root items (memoryReference itself is not displayed).
+            if (res.result && !res.result.includes('@' + addrHex)) {
+                res.result = `${res.result} @${addrHex}`;
+            }
         }
         return res;
     }

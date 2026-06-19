@@ -3519,7 +3519,8 @@ export class GDBDebugSession extends LoggingDebugSession {
                     let children: VariableObject[];
                     const childMap: { [name: string]: number } = {};
                     try {
-                        children = await this.miDebugger.varListChildren(args.variablesReference, id.name);
+                        children = await this.miDebugger.varListChildren(
+                            args.variablesReference, id.name, true, undefined, undefined, pVar.address, pVar.type);
                         const vars = children.map((child) => {
                             const varId = this.findOrCreateVariable(child);
                             child.id = varId;
